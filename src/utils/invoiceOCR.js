@@ -5,7 +5,7 @@ export async function extractInvoiceData(imageBase64, mediaType) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('Chưa có API key. Vào ⚙️ Cài đặt để nhập Gemini API key.')
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${apiKey}`
 
   const body = {
     contents: [{
