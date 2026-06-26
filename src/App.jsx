@@ -19,10 +19,25 @@ export default function App() {
   const syncTimerRef = useRef(null)
   const toast = useToast()
 
-  // Khởi tạo Google auth khi mở app nếu đã có Client ID
+  // Khởi tạo Google auth và tự động đăng nhập lại (silent) nếu đã từng đăng nhập
   useEffect(() => {
     const id = drive.getClientId()
-    if (id) drive.initTokenClient(id).catch(() => {})
+    const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
+    if (!id) return
+    drive.initTokenClient(id).then(() => {
+      if (!wasSignedIn) return
+      // Silent re-auth (không popup, dùng session Google đang có)
+      return drive.requestToken(true)
+        .then(() => {
+          setGSignedIn(true)
+          doSync()
+        })
+        .catch(() => {
+          // Silent fail — user sẽ tự bấm đăng nhập
+          localStorage.removeItem('google_was_signed_in')
+        })
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleImport = async (e) => {
@@ -55,6 +70,9 @@ export default function App() {
     }
   }
 
+  const toastRef = useRef(toast)
+  useEffect(() => { toastRef.current = toast }, [toast])
+
   const doSync = useCallback(async () => {
     if (!drive.isSignedIn()) return
     setSyncState('syncing')
@@ -65,11 +83,17 @@ export default function App() {
         db.transactions.toArray()
       ])
 
+      toastRef.current.show('☁️ Đang kéo dữ liệu từ Drive...', 'info')
       const remote = await drive.pull()
 
       if (remote) {
-        await mergeIntoDb(localOrders, remote.orders || [], db.orders)
-        await mergeIntoDb(localTx, remote.transactions || [], db.transactions)
+        const remoteOrders = remote.orders || []
+        const remoteTx = remote.transactions || []
+        toastRef.current.show(`📥 Drive có ${remoteOrders.length} đơn, đang merge...`, 'info')
+        await mergeIntoDb(localOrders, remoteOrders, db.orders)
+        await mergeIntoDb(localTx, remoteTx, db.transactions)
+      } else {
+        toastRef.current.show('Drive chưa có dữ liệu, đang đẩy lên...', 'info')
       }
 
       const [finalOrders, finalTx] = await Promise.all([
@@ -82,13 +106,17 @@ export default function App() {
       drive.setLastSync(now)
       setLastSyncUI(String(now))
       setSyncState('done')
-      // Thông báo các trang reload dữ liệu
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
+      toastRef.current.show(`✅ Đồng bộ xong: ${finalOrders.filter(o => !o.deletedAt).length} đơn hàng`, 'success')
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
       setSyncError(err.message)
       setSyncState('error')
-      if (err.message.includes('hết hạn')) setGSignedIn(false)
+      toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
+      if (err.message.includes('hết hạn')) {
+        setGSignedIn(false)
+        localStorage.removeItem('google_was_signed_in')
+      }
     }
   }, [])
 
@@ -102,8 +130,9 @@ export default function App() {
     setSyncState('syncing')
     try {
       await drive.initTokenClient(clientId)
-      await drive.requestToken()
+      await drive.requestToken(false)
       setGSignedIn(true)
+      localStorage.setItem('google_was_signed_in', 'true')
       await doSync()
     } catch (err) {
       setSyncError(err.message)
@@ -116,6 +145,7 @@ export default function App() {
     setGSignedIn(false)
     setSyncState('idle')
     setSyncError('')
+    localStorage.removeItem('google_was_signed_in')
   }
 
   const syncIcon = syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : syncState === 'error' ? '❌' : '☁️'

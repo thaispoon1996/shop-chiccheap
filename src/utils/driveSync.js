@@ -40,7 +40,7 @@ export async function initTokenClient(clientId) {
   })
 }
 
-export function requestToken() {
+export function requestToken(silent = false) {
   return new Promise((resolve, reject) => {
     if (!_tokenClient) { reject(new Error('Chưa khởi tạo. Vui lòng nhập Client ID.')); return }
     _tokenClient.callback = (resp) => {
@@ -53,7 +53,8 @@ export function requestToken() {
       _fileId = null
       resolve()
     }
-    _tokenClient.requestAccessToken({ prompt: isSignedIn() ? '' : 'consent' })
+    // silent=true: không hiện popup, dùng session hiện có (tự fail nếu chưa có session)
+    _tokenClient.requestAccessToken({ prompt: silent ? 'none' : 'consent' })
   })
 }
 
