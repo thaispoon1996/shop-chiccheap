@@ -5,7 +5,7 @@ export async function extractInvoiceData(imageBase64, mediaType) {
   const apiKey = getApiKey()
   if (!apiKey) throw new Error('Chưa có API key. Vào ⚙️ Cài đặt để nhập Gemini API key.')
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`
 
   const body = {
     contents: [{
@@ -33,9 +33,9 @@ export async function extractInvoiceData(imageBase64, mediaType) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     const status = res.status
-    if (status === 429) throw new Error('Vượt giới hạn miễn phí. Thử lại sau vài phút.')
+    if (status === 429) throw new Error('API key bị quota = 0. Vào aistudio.google.com/apikey → tạo key mới trong "new project" rồi cập nhật trong ⚙️ Cài đặt.')
     if (status === 401 || status === 403) throw new Error('API key không hợp lệ. Kiểm tra lại trong ⚙️ Cài đặt.')
-    if (status === 404) throw new Error('Model không tìm thấy. Kiểm tra lại API key có quyền truy cập Gemini không.')
+    if (status === 404) throw new Error('Model không tìm thấy. Vào aistudio.google.com/apikey → tạo key mới trong "new project".')
     throw new Error(err?.error?.message || `Lỗi ${status}. Thử lại sau.`)
   }
 
