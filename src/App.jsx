@@ -89,7 +89,8 @@ export default function App() {
       if (remote) {
         const remoteOrders = remote.orders || []
         const remoteTx = remote.transactions || []
-        toastRef.current.show(`📥 Drive có ${remoteOrders.length} đơn, đang merge...`, 'info')
+        const activeRemote = remoteOrders.filter(o => !o.deletedAt).length
+        toastRef.current.show(`📥 Drive: ${remoteOrders.length} đơn (${activeRemote} hoạt động), đang merge...`, 'info')
         await mergeIntoDb(localOrders, remoteOrders, db.orders)
         await mergeIntoDb(localTx, remoteTx, db.transactions)
       } else {
@@ -100,14 +101,19 @@ export default function App() {
         db.orders.toArray(),
         db.transactions.toArray()
       ])
-      await drive.push(finalOrders, finalTx)
+      // Chỉ push đơn còn hoạt động hoặc xóa trong 30 ngày gần nhất (tránh rác tích lũy)
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+      const ordersToSync = finalOrders.filter(o => !o.deletedAt || o.deletedAt > cutoff)
+      const txToSync = finalTx.filter(t => !t.deletedAt || t.deletedAt > cutoff)
+      await drive.push(ordersToSync, txToSync)
 
+      const activeCount = finalOrders.filter(o => !o.deletedAt).length
       const now = Date.now()
       drive.setLastSync(now)
       setLastSyncUI(String(now))
       setSyncState('done')
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
-      toastRef.current.show(`✅ Đồng bộ xong: ${finalOrders.filter(o => !o.deletedAt).length} đơn hàng`, 'success')
+      toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
       setSyncError(err.message)
@@ -230,6 +236,7 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
   const [showClientId, setShowClientId] = useState(false)
   const [driveInfo, setDriveInfo] = useState(null)
   const [checking, setChecking] = useState(false)
+  const [overwriting, setOverwriting] = useState(false)
 
   const handleSaveGroq = () => {
     saveApiKey(groqKey)
@@ -242,6 +249,23 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
     toast.show('Đã lưu Google Client ID', 'success')
   }
 
+  const handleOverwriteDrive = async () => {
+    if (!window.confirm('Ghi đè Drive bằng dữ liệu thiết bị này? Dữ liệu trên Drive sẽ bị xóa và thay bằng dữ liệu local.')) return
+    setOverwriting(true)
+    try {
+      const [orders, txs] = await Promise.all([db.orders.toArray(), db.transactions.toArray()])
+      const activeOrders = orders.filter(o => !o.deletedAt)
+      const activeTxs = txs.filter(t => !t.deletedAt)
+      await drive.push(activeOrders, activeTxs)
+      toast.show(`✅ Đã ghi đè Drive: ${activeOrders.length} đơn, ${activeTxs.length} giao dịch`, 'success')
+      setDriveInfo(null)
+    } catch (err) {
+      toast.show('❌ Lỗi: ' + err.message, 'error')
+    } finally {
+      setOverwriting(false)
+    }
+  }
+
   const handleCheckDrive = async () => {
     setChecking(true)
     setDriveInfo(null)
@@ -250,10 +274,13 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
       if (!remote) {
         setDriveInfo({ empty: true })
       } else {
-        const orders = (remote.orders || []).filter(o => !o.deletedAt)
+        const allOrders = remote.orders || []
+        const orders = allOrders.filter(o => !o.deletedAt)
+        const deletedOrders = allOrders.filter(o => o.deletedAt)
         const transactions = (remote.transactions || []).filter(t => !t.deletedAt)
         setDriveInfo({
           orders: orders.length,
+          deletedOrders: deletedOrders.length,
           transactions: transactions.length,
           syncedAt: remote.ts ? new Date(remote.ts).toLocaleString('vi-VN') : null
         })
@@ -379,7 +406,8 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                   {driveInfo.orders !== undefined && (
                     <>
                       <p style={{ fontWeight: 700, color: '#0369a1', marginBottom: 6 }}>📦 Dữ liệu trên Drive:</p>
-                      <p style={{ color: 'var(--gray-700)' }}>🛍️ Đơn hàng: <strong>{driveInfo.orders}</strong></p>
+                      <p style={{ color: 'var(--gray-700)' }}>🛍️ Đơn hàng đang hoạt động: <strong>{driveInfo.orders}</strong></p>
+                      <p style={{ color: 'var(--gray-700)' }}>🗑️ Đã xóa (ẩn): <strong>{driveInfo.deletedOrders}</strong></p>
                       <p style={{ color: 'var(--gray-700)' }}>💰 Giao dịch: <strong>{driveInfo.transactions}</strong></p>
                       {driveInfo.syncedAt && (
                         <p style={{ color: 'var(--gray-500)', fontSize: 12, marginTop: 4 }}>
@@ -391,7 +419,7 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <button
                   onClick={onSync}
                   disabled={syncState === 'syncing'}
@@ -411,6 +439,17 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                   }}
                 >Đăng xuất</button>
               </div>
+              <button
+                onClick={handleOverwriteDrive}
+                disabled={overwriting}
+                style={{
+                  width: '100%', padding: '9px', borderRadius: 10,
+                  border: '1.5px solid #fca5a5', background: '#fff',
+                  color: '#dc2626', fontWeight: 600, fontSize: 12
+                }}
+              >
+                {overwriting ? '⏳ Đang ghi...' : '⚠️ Ghi đè Drive bằng dữ liệu thiết bị này'}
+              </button>
             </div>
           )}
         </Section>
