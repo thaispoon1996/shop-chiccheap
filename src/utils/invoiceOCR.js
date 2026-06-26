@@ -1,47 +1,53 @@
-export const getApiKey = () => localStorage.getItem('gemini_api_key') || ''
-export const saveApiKey = (key) => localStorage.setItem('gemini_api_key', key.trim())
+export const getApiKey = () => localStorage.getItem('groq_api_key') || ''
+export const saveApiKey = (key) => localStorage.setItem('groq_api_key', key.trim())
 
 export async function extractInvoiceData(imageBase64, mediaType) {
   const apiKey = getApiKey()
-  if (!apiKey) throw new Error('Chưa có API key. Vào ⚙️ Cài đặt để nhập Gemini API key.')
+  if (!apiKey) throw new Error('Chưa có API key. Vào ⚙️ Cài đặt để nhập Groq API key.')
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`
-
-  const body = {
-    contents: [{
-      parts: [
-        { inline_data: { mime_type: mediaType, data: imageBase64 } },
-        {
-          text: `Đây là ảnh hóa đơn cho thuê trang phục. Trích xuất thông tin và trả về JSON thuần (không markdown, không giải thích):
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      max_tokens: 512,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: { url: `data:${mediaType};base64,${imageBase64}` }
+          },
+          {
+            type: 'text',
+            text: `Đây là ảnh hóa đơn cho thuê trang phục. Trích xuất thông tin và trả về JSON thuần (không markdown, không giải thích):
 {"customerName":"","phone":"","rentDate":"YYYY-MM-DD","returnDate":"YYYY-MM-DD","totalAmount":0,"notes":""}
 
+Năm hiện tại là 2026. Nếu chỉ thấy ngày/tháng thì thêm năm 2026.
 - phone: 10 số bắt đầu bằng 0
-- totalAmount: số nguyên (VND), không có ký hiệu tiền tệ
+- totalAmount: số nguyên (VND), không ký hiệu tiền tệ
 - notes: ghi chú, mã đồ, số đo, đặt cọc...
-- Nếu không tìm thấy trường nào: để chuỗi rỗng hoặc 0`
-        }
-      ]
-    }]
-  }
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+- Nếu không tìm thấy: để chuỗi rỗng hoặc 0`
+          }
+        ]
+      }]
+    })
   })
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     const status = res.status
-    if (status === 429) throw new Error('API key bị quota = 0. Vào aistudio.google.com/apikey → tạo key mới trong "new project" rồi cập nhật trong ⚙️ Cài đặt.')
-    if (status === 401 || status === 403) throw new Error('API key không hợp lệ. Kiểm tra lại trong ⚙️ Cài đặt.')
-    if (status === 404) throw new Error('Model không tìm thấy. Vào aistudio.google.com/apikey → tạo key mới trong "new project".')
+    if (status === 429) throw new Error('Vượt giới hạn. Thử lại sau vài phút.')
+    if (status === 401) throw new Error('API key không hợp lệ. Kiểm tra lại trong ⚙️ Cài đặt.')
     throw new Error(err?.error?.message || `Lỗi ${status}. Thử lại sau.`)
   }
 
   const data = await res.json()
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
-  if (!text) throw new Error('Gemini không trả về dữ liệu. Thử lại.')
+  const text = data?.choices?.[0]?.message?.content?.trim()
+  if (!text) throw new Error('Không nhận được phản hồi. Thử lại.')
 
   try {
     return JSON.parse(text)

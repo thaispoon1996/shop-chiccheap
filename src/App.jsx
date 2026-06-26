@@ -107,15 +107,15 @@ function ApiKeyModal({ onClose, toast }) {
       >
         <h3 style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>⚙️ Cài đặt API key</h3>
         <p style={{ fontSize: 13, color: 'var(--gray-500)', marginBottom: 16 }}>
-          Cần Gemini API key để dùng tính năng quét hóa đơn bằng AI (miễn phí).
-          Lấy key tại <strong>aistudio.google.com</strong>
+          Cần Groq API key để dùng tính năng quét hóa đơn bằng AI (miễn phí).
+          Đăng ký tại <strong>console.groq.com</strong> → Create API Key
         </p>
         <div style={{ position: 'relative' }}>
           <input
             type={show ? 'text' : 'password'}
             value={key}
             onChange={e => setKey(e.target.value)}
-            placeholder="AIza..."
+            placeholder="gsk_..."
             style={{
               width: '100%', padding: '11px 42px 11px 12px', borderRadius: 10,
               border: '1.5px solid var(--gray-200)', fontSize: 14,
