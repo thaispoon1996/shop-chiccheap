@@ -458,8 +458,14 @@ function TransactionForm({ tx, onSave, onCancel }) {
 
       <div style={{ marginBottom: 14 }}>
         <label style={labelStyle}>Số tiền (₫) *</label>
-        <input type="number" value={form.amount} onChange={e => set('amount', e.target.value)}
-          placeholder="500000" min="0" style={{ ...inputStyle, border: `1.5px solid ${errors.amount ? 'var(--danger)' : 'var(--gray-200)'}`, padding: '12px 14px' }} />
+        <input
+          type="text"
+          inputMode="numeric"
+          value={form.amount ? Number(form.amount).toLocaleString('vi-VN') : ''}
+          onChange={e => set('amount', e.target.value.replace(/\D/g, ''))}
+          placeholder="500.000"
+          style={{ ...inputStyle, border: `1.5px solid ${errors.amount ? 'var(--danger)' : 'var(--gray-200)'}`, padding: '12px 14px' }}
+        />
         {errors.amount && <p style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>{errors.amount}</p>}
       </div>
 

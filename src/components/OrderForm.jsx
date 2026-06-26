@@ -3,6 +3,9 @@ import { db, ORDER_STATUS_LIST, generateOrderId } from '../db/database'
 import { todayISO, formatDateInput } from '../utils/formatters'
 import { InvoiceScanner } from './InvoiceScanner'
 
+const toRaw = (display) => display.replace(/\D/g, '')
+const toDisplay = (raw) => raw ? Number(raw).toLocaleString('vi-VN') : ''
+
 const EMPTY_FORM = {
   customerName: '',
   phone: '',
@@ -79,6 +82,16 @@ export function OrderForm({ order, onSave, onCancel, onNeedApiKey }) {
         data.orderId = await generateOrderId()
         data.createdAt = Date.now()
         await db.orders.add(data)
+        await db.transactions.add({
+          type: 'Thu',
+          category: 'Tiền thuê đồ',
+          amount: Number(form.totalAmount),
+          date: form.rentDate,
+          notes: `${data.orderId} - ${data.customerName}`,
+          orderId: data.orderId,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        })
       }
       onSave()
     } finally {
@@ -134,11 +147,11 @@ export function OrderForm({ order, onSave, onCancel, onNeedApiKey }) {
 
       <Field label="Tổng tiền (₫) *" error={errors.totalAmount}>
         <input
-          type="number"
-          value={form.totalAmount}
-          onChange={e => set('totalAmount', e.target.value)}
-          placeholder="500000"
-          min="0"
+          type="text"
+          inputMode="numeric"
+          value={toDisplay(form.totalAmount)}
+          onChange={e => set('totalAmount', toRaw(e.target.value))}
+          placeholder="500.000"
           style={inputStyle(!!errors.totalAmount)}
         />
       </Field>
