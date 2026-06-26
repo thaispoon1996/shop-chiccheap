@@ -228,6 +228,8 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
   const [showKey, setShowKey] = useState(false)
   const [clientId, setClientId] = useState(drive.getClientId())
   const [showClientId, setShowClientId] = useState(false)
+  const [driveInfo, setDriveInfo] = useState(null)
+  const [checking, setChecking] = useState(false)
 
   const handleSaveGroq = () => {
     saveApiKey(groqKey)
@@ -238,6 +240,29 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
     drive.saveClientId(clientId)
     if (clientId) await drive.initTokenClient(clientId).catch(() => {})
     toast.show('Đã lưu Google Client ID', 'success')
+  }
+
+  const handleCheckDrive = async () => {
+    setChecking(true)
+    setDriveInfo(null)
+    try {
+      const remote = await drive.pull()
+      if (!remote) {
+        setDriveInfo({ empty: true })
+      } else {
+        const orders = (remote.orders || []).filter(o => !o.deletedAt)
+        const transactions = (remote.transactions || []).filter(t => !t.deletedAt)
+        setDriveInfo({
+          orders: orders.length,
+          transactions: transactions.length,
+          syncedAt: remote.ts ? new Date(remote.ts).toLocaleString('vi-VN') : null
+        })
+      }
+    } catch (err) {
+      setDriveInfo({ error: err.message })
+    } finally {
+      setChecking(false)
+    }
   }
 
   const formatLastSync = (ts) => {
@@ -322,13 +347,50 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
             <div>
               <div style={{
                 background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10,
-                padding: '12px 14px', marginBottom: 12
+                padding: '12px 14px', marginBottom: 10
               }}>
                 <p style={{ fontSize: 13, color: '#166534', fontWeight: 600 }}>✅ Đã kết nối Google Drive</p>
-                <p style={{ fontSize: 12, color: '#16a34a', marginTop: 4 }}>
+                <p style={{ fontSize: 12, color: '#16a34a', marginTop: 2 }}>
                   Lần đồng bộ cuối: {formatLastSync(lastSync)}
                 </p>
               </div>
+
+              {/* Kiểm tra dữ liệu trên Drive */}
+              <button
+                onClick={handleCheckDrive}
+                disabled={checking}
+                style={{
+                  width: '100%', padding: '9px', borderRadius: 10, marginBottom: 8,
+                  border: '1.5px solid var(--gray-200)', background: '#fff',
+                  color: 'var(--gray-700)', fontWeight: 600, fontSize: 13
+                }}
+              >
+                {checking ? '⏳ Đang kiểm tra...' : '🔍 Xem dữ liệu trên Drive'}
+              </button>
+
+              {driveInfo && (
+                <div style={{
+                  background: driveInfo.error ? '#fef2f2' : driveInfo.empty ? '#fafafa' : '#f0f9ff',
+                  border: `1px solid ${driveInfo.error ? '#fca5a5' : driveInfo.empty ? 'var(--gray-200)' : '#bae6fd'}`,
+                  borderRadius: 10, padding: '12px 14px', marginBottom: 10, fontSize: 13
+                }}>
+                  {driveInfo.error && <p style={{ color: 'var(--danger)' }}>❌ {driveInfo.error}</p>}
+                  {driveInfo.empty && <p style={{ color: 'var(--gray-500)' }}>☁️ Drive chưa có dữ liệu nào.</p>}
+                  {driveInfo.orders !== undefined && (
+                    <>
+                      <p style={{ fontWeight: 700, color: '#0369a1', marginBottom: 6 }}>📦 Dữ liệu trên Drive:</p>
+                      <p style={{ color: 'var(--gray-700)' }}>🛍️ Đơn hàng: <strong>{driveInfo.orders}</strong></p>
+                      <p style={{ color: 'var(--gray-700)' }}>💰 Giao dịch: <strong>{driveInfo.transactions}</strong></p>
+                      {driveInfo.syncedAt && (
+                        <p style={{ color: 'var(--gray-500)', fontSize: 12, marginTop: 4 }}>
+                          Đẩy lên lúc: {driveInfo.syncedAt}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
                   onClick={onSync}
