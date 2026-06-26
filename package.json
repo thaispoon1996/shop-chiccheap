@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
     "chart.js": "^4.4.7",
     "dexie": "^4.0.10",
     "react": "^18.3.1",
