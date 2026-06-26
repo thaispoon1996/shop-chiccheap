@@ -5,7 +5,7 @@ import { StatusBadge } from '../components/common/StatusBadge'
 import { Modal, ConfirmDialog } from '../components/common/Modal'
 import { OrderForm } from '../components/OrderForm'
 
-export function OrdersPage({ toast }) {
+export function OrdersPage({ toast, onNeedApiKey }) {
   const [orders, setOrders] = useState([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState([])
@@ -173,6 +173,7 @@ export function OrdersPage({ toast }) {
             order={editOrder}
             onSave={handleSave}
             onCancel={() => { setShowForm(false); setEditOrder(null) }}
+            onNeedApiKey={onNeedApiKey}
           />
         </Modal>
       )}

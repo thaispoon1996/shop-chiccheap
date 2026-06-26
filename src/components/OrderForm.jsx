@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { db, ORDER_STATUS_LIST, generateOrderId } from '../db/database'
 import { todayISO, formatDateInput } from '../utils/formatters'
+import { InvoiceScanner } from './InvoiceScanner'
 
 const EMPTY_FORM = {
   customerName: '',
@@ -12,7 +13,7 @@ const EMPTY_FORM = {
   status: ORDER_STATUS_LIST[0]
 }
 
-export function OrderForm({ order, onSave, onCancel }) {
+export function OrderForm({ order, onSave, onCancel, onNeedApiKey }) {
   const isEdit = !!order
   const [form, setForm] = useState(isEdit ? {
     ...order,
@@ -22,6 +23,19 @@ export function OrderForm({ order, onSave, onCancel }) {
   } : EMPTY_FORM)
   const [errors, setErrors] = useState({})
   const [saving, setSaving] = useState(false)
+
+  const handleFillFromInvoice = (data) => {
+    setForm(prev => ({
+      ...prev,
+      ...(data.customerName && { customerName: data.customerName }),
+      ...(data.phone && { phone: data.phone }),
+      ...(data.rentDate && { rentDate: data.rentDate }),
+      ...(data.returnDate && { returnDate: data.returnDate }),
+      ...(data.totalAmount && data.totalAmount !== 0 && { totalAmount: String(data.totalAmount) }),
+      ...(data.notes && { notes: data.notes }),
+    }))
+    setErrors({})
+  }
 
   const set = (field, val) => {
     setForm(p => ({ ...p, [field]: val }))
@@ -74,6 +88,10 @@ export function OrderForm({ order, onSave, onCancel }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+      {!isEdit && (
+        <InvoiceScanner onFill={handleFillFromInvoice} onNeedApiKey={onNeedApiKey} />
+      )}
+
       <Field label="Tên khách hàng *" error={errors.customerName}>
         <input
           type="text"
