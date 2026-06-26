@@ -22,6 +22,10 @@ export function OrdersPage({ toast, onNeedApiKey }) {
   }, [])
 
   useEffect(() => { loadOrders() }, [loadOrders])
+  useEffect(() => {
+    window.addEventListener('chiccheap:sync', loadOrders)
+    return () => window.removeEventListener('chiccheap:sync', loadOrders)
+  }, [loadOrders])
 
   const filtered = orders
     .filter(o => {

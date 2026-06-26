@@ -31,6 +31,10 @@ export function FinancePage({ toast }) {
   }, [])
 
   useEffect(() => { loadTx() }, [loadTx])
+  useEffect(() => {
+    window.addEventListener('chiccheap:sync', loadTx)
+    return () => window.removeEventListener('chiccheap:sync', loadTx)
+  }, [loadTx])
 
   const years = [...new Set(transactions.map(t => new Date(t.date).getFullYear()))]
   if (!years.includes(new Date().getFullYear())) years.push(new Date().getFullYear())
