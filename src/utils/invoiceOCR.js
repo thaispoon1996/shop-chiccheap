@@ -8,7 +8,7 @@ export async function extractInvoiceData(imageBase64, mediaType) {
   if (!apiKey) throw new Error('Chưa có API key. Vào ⚙️ Cài đặt để nhập Gemini API key.')
 
   const genAI = new GoogleGenerativeAI(apiKey)
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' })
+  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
 
   const result = await model.generateContent([
     {
@@ -23,7 +23,18 @@ export async function extractInvoiceData(imageBase64, mediaType) {
 - Nếu không tìm thấy trường nào: để chuỗi rỗng hoặc 0`
   ])
 
-  const text = result.response.text().trim()
+  let text
+  try {
+    text = result.response.text().trim()
+  } catch (e) {
+    const msg = e?.message || ''
+    if (msg.includes('429') || msg.includes('quota') || msg.includes('Quota'))
+      throw new Error('Vượt giới hạn miễn phí. Thử lại sau vài phút.')
+    if (msg.includes('API key') || msg.includes('401') || msg.includes('403'))
+      throw new Error('API key không hợp lệ. Kiểm tra lại trong ⚙️ Cài đặt.')
+    throw new Error('Lỗi kết nối Gemini. Kiểm tra mạng và thử lại.')
+  }
+
   try {
     return JSON.parse(text)
   } catch {
