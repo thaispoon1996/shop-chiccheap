@@ -37,7 +37,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
   const [editOrder, setEditOrder] = useState(null)
   const [deleteOrder, setDeleteOrder] = useState(null)
   const [swipeId, setSwipeId] = useState(null)
-  const [sortBy, setSortBy] = useState('returnDate')
+  const [sortBy, setSortBy] = useState('createdAt')
 
   const loadOrders = useCallback(async () => {
     const all = await db.orders.filter(o => !o.deletedAt).toArray()
