@@ -6,35 +6,153 @@ import { FinancePage } from './pages/FinancePage'
 import { useToast } from './components/common/Toast'
 import { exportToCSV, importFromCSV } from './utils/exportImport'
 import { getApiKey, saveApiKey } from './utils/invoiceOCR'
-import * as drive from './utils/driveSync'
+import * as fb from './utils/firebaseSync'
 import { db } from './db/database'
 
 export default function App() {
   const [page, setPage] = useState('dashboard')
   const [showSettings, setShowSettings] = useState(false)
-  const [syncState, setSyncState] = useState('idle') // idle | syncing | done | error
-  const [syncError, setSyncError] = useState('')
+  const [syncState, setSyncState] = useState('idle')
   const [gSignedIn, setGSignedIn] = useState(false)
-  const [lastSync, setLastSyncUI] = useState(drive.getLastSync())
-  const syncTimerRef = useRef(null)
+  const [fbUser, setFbUser] = useState(null)
+  const [lastSync, setLastSyncUI] = useState(fb.getLastSync())
   const isSyncing = useRef(false)
   const toast = useToast()
+  const toastRef = useRef(toast)
+  useEffect(() => { toastRef.current = toast }, [toast])
 
-  // Khởi tạo token client ngay khi load (để khi user tap 🔑, popup mở đồng bộ)
-  // Nếu đã từng đăng nhập: thử silent re-auth
-  useEffect(() => {
-    const id = drive.getClientId()
-    if (!id) return
-    drive.initTokenClient(id).then(() => {
-      const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
-      if (!wasSignedIn) return
-      // Silent re-auth — thường thất bại trên iOS Safari, không sao, giữ flag
-      return drive.requestToken(true)
-        .then(() => { setGSignedIn(true); doSync() })
-        .catch(() => { setGSignedIn(false) })
-    }).catch(() => {})
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const mergeIntoDb = async (localRecords, remoteRecords, table, keyField = 'createdAt') => {
+    const localMap = new Map(localRecords.map(r => [r[keyField], r]))
+    for (const r of remoteRecords) {
+      const key = r[keyField]
+      if (!key) continue
+      const existing = localMap.get(key)
+      if (existing) {
+        if ((r.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+          const { id: _id, ...rest } = r
+          await table.update(existing.id, rest)
+        }
+      } else {
+        const { id: _id, ...rest } = r
+        await table.add(rest)
+      }
+    }
+  }
+
+  // Xử lý dữ liệu từ Firebase real-time listener
+  const handleRemoteData = useCallback(async (remote) => {
+    if (!remote) return
+    // Bỏ qua nếu đây là data chúng ta vừa push (tránh merge thừa)
+    if (remote.ts && remote.ts === fb.getLastPushTs()) return
+    if (isSyncing.current) return
+    isSyncing.current = true
+    try {
+      const [localOrders, localTx] = await Promise.all([
+        db.orders.toArray(), db.transactions.toArray()
+      ])
+      await mergeIntoDb(localOrders, remote.orders || [], db.orders, 'orderId')
+      await mergeIntoDb(localTx, remote.transactions || [], db.transactions, 'createdAt')
+      const now = Date.now()
+      fb.setLastSync(now)
+      setLastSyncUI(String(now))
+      window.dispatchEvent(new CustomEvent('chiccheap:sync'))
+      console.log(`[FB] Nhận dữ liệu: ${(remote.orders || []).length} đơn`)
+    } catch (err) {
+      console.error('[FB] Merge lỗi:', err.message)
+    } finally {
+      isSyncing.current = false
+    }
   }, [])
+
+  // Đẩy dữ liệu local lên Firebase
+  const pushToCloud = useCallback(async (silent = false) => {
+    if (!fb.isSignedIn()) return
+    if (isSyncing.current) return
+    isSyncing.current = true
+    setSyncState('syncing')
+    try {
+      const [orders, txs] = await Promise.all([
+        db.orders.toArray(), db.transactions.toArray()
+      ])
+      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+      const ordersToSync = orders.filter(o => !o.deletedAt || o.deletedAt > cutoff)
+      const txToSync = txs.filter(t => !t.deletedAt || t.deletedAt > cutoff)
+      await fb.push(ordersToSync, txToSync)
+      const activeCount = orders.filter(o => !o.deletedAt).length
+      const now = Date.now()
+      fb.setLastSync(now)
+      setLastSyncUI(String(now))
+      setSyncState('done')
+      if (!silent) toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn`, 'success')
+      setTimeout(() => setSyncState('idle'), 2500)
+      console.log(`[FB] Push xong ${new Date(now).toLocaleTimeString()} — ${ordersToSync.length} đơn`)
+    } catch (err) {
+      setSyncState('error')
+      if (!silent) toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
+      setTimeout(() => setSyncState('idle'), 3000)
+    } finally {
+      isSyncing.current = false
+    }
+  }, [])
+
+  // Khởi tạo Firebase và lắng nghe auth state
+  useEffect(() => {
+    if (!fb.isConfigured()) return
+    fb.init().then(() => {
+      // onAuthChange tự khôi phục session từ lần trước — không cần đăng nhập lại
+      const unsub = fb.onAuthChange((user) => {
+        if (user) {
+          setFbUser(user)
+          setGSignedIn(true)
+          // Subscribe real-time — nhận dữ liệu ngay khi thiết bị khác thay đổi
+          fb.subscribe(handleRemoteData)
+          // Push dữ liệu local lên để các thiết bị khác có thể pull
+          pushToCloud(true)
+        } else {
+          setFbUser(null)
+          setGSignedIn(false)
+          fb.unsubscribe()
+        }
+      })
+      return unsub
+    }).catch(err => console.error('[FB] Init lỗi:', err))
+  }, [handleRemoteData, pushToCloud])
+
+  // Đẩy ngay khi có thay đổi dữ liệu local
+  useEffect(() => {
+    const onDataChanged = () => pushToCloud(true)
+    window.addEventListener('chiccheap:push', onDataChanged)
+    return () => window.removeEventListener('chiccheap:push', onDataChanged)
+  }, [pushToCloud])
+
+  const handleGoogleSignIn = async () => {
+    if (!fb.isConfigured()) {
+      toast.show('Vui lòng nhập Firebase Config trong Cài đặt trước', 'error')
+      setShowSettings(true)
+      return
+    }
+    setSyncState('syncing')
+    try {
+      await fb.init()
+      const user = await fb.signIn()
+      setFbUser(user)
+      setGSignedIn(true)
+      fb.subscribe(handleRemoteData)
+      await pushToCloud(false)
+    } catch (err) {
+      setSyncState('idle')
+      if (err.code !== 'auth/popup-closed-by-user') {
+        toast.show('❌ Đăng nhập thất bại: ' + err.message, 'error')
+      }
+    }
+  }
+
+  const handleGoogleSignOut = async () => {
+    await fb.signOut()
+    setFbUser(null)
+    setGSignedIn(false)
+    setSyncState('idle')
+  }
 
   const handleImport = async (e) => {
     const file = e.target.files?.[0]
@@ -49,213 +167,16 @@ export default function App() {
     e.target.value = ''
   }
 
-  // Merge dữ liệu remote vào IndexedDB
-  // keyField: 'orderId' cho orders (stable across devices), 'createdAt' cho transactions
-  const mergeIntoDb = async (localRecords, remoteRecords, table, keyField = 'createdAt') => {
-    const localMap = new Map(localRecords.map(r => [r[keyField], r]))
-    for (const r of remoteRecords) {
-      const key = r[keyField]
-      if (!key) continue // bỏ qua record không có key
-      const existing = localMap.get(key)
-      if (existing) {
-        if ((r.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
-          const { id: _id, ...rest } = r
-          await table.update(existing.id, rest)
-        }
-      } else {
-        const { id: _id, ...rest } = r
-        await table.add(rest)
-      }
-    }
-  }
-
-  const toastRef = useRef(toast)
-  useEffect(() => { toastRef.current = toast }, [toast])
-
-  const doSync = useCallback(async (silent = false) => {
-    if (!drive.isSignedIn()) return
-    if (isSyncing.current) return
-    isSyncing.current = true
-    setSyncState('syncing')
-    setSyncError('')
-    try {
-      const [localOrders, localTx] = await Promise.all([
-        db.orders.toArray(),
-        db.transactions.toArray()
-      ])
-
-      if (!silent) toastRef.current.show('☁️ Đang kéo dữ liệu từ Drive...', 'info')
-      const remote = await drive.pull()
-
-      if (remote) {
-        const remoteOrders = remote.orders || []
-        const remoteTx = remote.transactions || []
-        if (!silent) {
-          const activeRemote = remoteOrders.filter(o => !o.deletedAt).length
-          toastRef.current.show(`📥 Drive: ${remoteOrders.length} đơn (${activeRemote} hoạt động), đang merge...`, 'info')
-        }
-        await mergeIntoDb(localOrders, remoteOrders, db.orders, 'orderId')
-        await mergeIntoDb(localTx, remoteTx, db.transactions, 'createdAt')
-      }
-
-      const [finalOrders, finalTx] = await Promise.all([
-        db.orders.toArray(),
-        db.transactions.toArray()
-      ])
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
-      const ordersToSync = finalOrders.filter(o => !o.deletedAt || o.deletedAt > cutoff)
-      const txToSync = finalTx.filter(t => !t.deletedAt || t.deletedAt > cutoff)
-      await drive.push(ordersToSync, txToSync)
-
-      const activeCount = finalOrders.filter(o => !o.deletedAt).length
-      const now = Date.now()
-      drive.setLastSync(now)
-      setLastSyncUI(String(now))
-      setSyncState('done')
-      window.dispatchEvent(new CustomEvent('chiccheap:sync'))
-      console.log(`[Sync] Push xong ${new Date(now).toLocaleTimeString()} — ${ordersToSync.length} đơn lên Drive`)
-      if (!silent) toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
-      setTimeout(() => setSyncState('idle'), 2500)
-    } catch (err) {
-      if (err.message.includes('hết hạn')) {
-        setSyncState('idle')
-        // Chỉ logout UI khi user bấm tay (không silent) — không tự logout khi sync nền
-        if (!silent) {
-          setGSignedIn(false)
-          toastRef.current.show('🔑 Phiên hết hạn, nhấn 🔑 để đăng nhập lại', 'error')
-        }
-      } else {
-        setSyncError(err.message)
-        setSyncState('error')
-        if (!silent) toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
-      }
-    } finally {
-      isSyncing.current = false
-    }
-  }, [])
-
-  // Pull nhẹ từ Drive — không spinner, không toast, chỉ merge + refresh UI
-  const backgroundPull = useCallback(async () => {
-    if (isSyncing.current) return
-    // Nếu token hết hạn, thử re-auth silent trước
-    if (!drive.isSignedIn()) {
-      const clientId = drive.getClientId()
-      const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
-      if (!clientId || !wasSignedIn) return
-      try {
-        await drive.initTokenClient(clientId)
-        await drive.requestToken(true)
-        setGSignedIn(true)
-        console.log('[Sync] Re-auth silent thành công')
-      } catch {
-        console.warn('[Sync] Re-auth silent thất bại, bỏ qua pull lần này')
-        return
-      }
-    }
-    isSyncing.current = true
-    try {
-      const [localOrders, localTx] = await Promise.all([
-        db.orders.toArray(),
-        db.transactions.toArray()
-      ])
-      const remote = await drive.pull()
-      if (!remote) { console.log('[Sync] Drive chưa có dữ liệu'); return }
-
-      const prevCount = localOrders.filter(o => !o.deletedAt).length
-      await mergeIntoDb(localOrders, remote.orders || [], db.orders, 'orderId')
-      await mergeIntoDb(localTx, remote.transactions || [], db.transactions, 'createdAt')
-
-      const afterOrders = await db.orders.filter(o => !o.deletedAt).toArray()
-      const afterCount = afterOrders.length
-      const now = Date.now()
-      drive.setLastSync(now)
-      setLastSyncUI(String(now))
-      window.dispatchEvent(new CustomEvent('chiccheap:sync'))
-      console.log(`[Sync] Pull xong ${new Date(now).toLocaleTimeString()} — Drive: ${(remote.orders||[]).length} đơn, local trước: ${prevCount}, sau: ${afterCount}`)
-    } catch (err) {
-      // Background pull thất bại hoàn toàn im lặng — KHÔNG logout user
-      // Lần sau sẽ tự thử lại
-      console.warn('[Sync] backgroundPull lỗi (silent):', err.message)
-    } finally {
-      isSyncing.current = false
-    }
-  }, [])
-
-  // Kéo ngay khi user mở lại app
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') backgroundPull()
-    }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [backgroundPull])
-
-  // Kéo định kỳ mỗi 20 giây để thiết bị khác thấy dữ liệu mới
-  useEffect(() => {
-    const timer = setInterval(backgroundPull, 20 * 1000)
-    return () => clearInterval(timer)
-  }, [backgroundPull])
-
-  // Đẩy ngay lên Drive khi có thay đổi dữ liệu cục bộ
-  useEffect(() => {
-    const onDataChanged = () => {
-      if (drive.isSignedIn()) doSync(true)
-    }
-    window.addEventListener('chiccheap:push', onDataChanged)
-    return () => window.removeEventListener('chiccheap:push', onDataChanged)
-  }, [doSync])
-
-  const handleGoogleSignIn = () => {
-    const clientId = drive.getClientId()
-    if (!clientId) {
-      toast.show('Vui lòng nhập Google Client ID trước', 'error')
-      setShowSettings(true)
-      return
-    }
-    // KHÔNG set syncState ở đây — để doSync tự quản lý
-    // Nếu set 'syncing' ở đây mà doSync bị block bởi isSyncing thì UI sẽ stuck
-
-    const onAuthSuccess = () => {
-      setGSignedIn(true)
-      localStorage.setItem('google_was_signed_in', 'true')
-      drive.fetchAndCacheUserEmail()
-      doSync()
-    }
-    const onAuthFail = (err) => {
-      const msg = err?.message || err?.error || String(err) || 'Thử lại'
-      toast.show('❌ Đăng nhập thất bại: ' + msg, 'error')
-    }
-
-    if (drive.isClientInitialized()) {
-      // Gọi requestToken ĐỒNG BỘ ngay sau user tap — iOS Safari không block popup
-      drive.requestToken(false).then(onAuthSuccess).catch(onAuthFail)
-    } else {
-      // Token client chưa init (lần đầu dùng) — phải async trước
-      drive.initTokenClient(clientId)
-        .then(() => drive.requestToken(false))
-        .then(onAuthSuccess)
-        .catch(onAuthFail)
-    }
-  }
-
-  const handleGoogleSignOut = () => {
-    drive.signOut()
-    setGSignedIn(false)
-    setSyncState('idle')
-    setSyncError('')
-    localStorage.removeItem('google_was_signed_in')
-  }
-
-  const syncIcon = !gSignedIn ? '🔑' : syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : syncState === 'error' ? '❌' : '☁️'
+  const syncIcon = !gSignedIn ? '🔑' : syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : '☁️'
   const lastSyncText = lastSync ? `Sync lần cuối: ${new Date(Number(lastSync)).toLocaleTimeString('vi-VN')}` : 'Chưa đồng bộ'
-  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? lastSyncText : 'Nhấn để đăng nhập lại Google Drive'
+  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? lastSyncText : 'Đăng nhập để đồng bộ'
 
   const pageProps = { toast, setPage, onNeedApiKey: () => setShowSettings(true) }
 
   const headerActions = (
     <>
       <button
-        onClick={gSignedIn ? doSync : handleGoogleSignIn}
+        onClick={gSignedIn ? () => pushToCloud(false) : handleGoogleSignIn}
         title={syncTitle}
         disabled={syncState === 'syncing'}
         style={{ ...headerBtnStyle, opacity: syncState === 'syncing' ? 0.6 : 1 }}
@@ -277,28 +198,17 @@ export default function App() {
         {page === 'finance' && <FinancePage {...pageProps} />}
       </Layout>
 
-      {/* Sync error toast */}
-      {syncState === 'error' && syncError && (
-        <div style={{
-          position: 'fixed', bottom: 90, left: 16, right: 16, zIndex: 100,
-          background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 10,
-          padding: '10px 14px', fontSize: 13, color: '#991b1b'
-        }}>
-          ❌ {syncError}
-          <button onClick={() => setSyncState('idle')} style={{ float: 'right', color: '#991b1b', fontWeight: 700 }}>✕</button>
-        </div>
-      )}
-
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
           toast={toast}
           gSignedIn={gSignedIn}
+          fbUser={fbUser}
           lastSync={lastSync}
           syncState={syncState}
           onSignIn={handleGoogleSignIn}
           onSignOut={handleGoogleSignOut}
-          onSync={doSync}
+          onSync={() => pushToCloud(false)}
         />
       )}
 
@@ -316,13 +226,13 @@ const headerBtnStyle = {
   flexShrink: 0
 }
 
-function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignIn, onSignOut, onSync }) {
+function SettingsModal({ onClose, toast, gSignedIn, fbUser, lastSync, syncState, onSignIn, onSignOut, onSync }) {
   const [groqKey, setGroqKey] = useState(getApiKey())
   const [showKey, setShowKey] = useState(false)
-  const [clientId, setClientId] = useState(drive.getClientId())
-  const [showClientId, setShowClientId] = useState(false)
-  const [driveInfo, setDriveInfo] = useState(null)
-  const [checking, setChecking] = useState(false)
+  const [fbConfigStr, setFbConfigStr] = useState(() => {
+    const c = fb.getConfig()
+    return c ? JSON.stringify(c, null, 2) : ''
+  })
   const [overwriting, setOverwriting] = useState(false)
 
   const handleSaveGroq = () => {
@@ -330,22 +240,29 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
     toast.show('Đã lưu Groq API key', 'success')
   }
 
-  const handleSaveClientId = async () => {
-    drive.saveClientId(clientId)
-    if (clientId) await drive.initTokenClient(clientId).catch(() => {})
-    toast.show('Đã lưu Google Client ID', 'success')
+  const handleSaveFbConfig = () => {
+    try {
+      const config = JSON.parse(fbConfigStr)
+      if (!config.apiKey || !config.databaseURL) {
+        toast.show('Config thiếu apiKey hoặc databaseURL', 'error')
+        return
+      }
+      fb.saveConfig(config)
+      toast.show('Đã lưu Firebase Config — tải lại trang để áp dụng', 'success')
+    } catch {
+      toast.show('JSON không hợp lệ, kiểm tra lại', 'error')
+    }
   }
 
-  const handleOverwriteDrive = async () => {
-    if (!window.confirm('Ghi đè Drive bằng dữ liệu thiết bị này? Dữ liệu trên Drive sẽ bị xóa và thay bằng dữ liệu local.')) return
+  const handleOverwrite = async () => {
+    if (!window.confirm('Ghi đè cloud bằng dữ liệu thiết bị này?')) return
     setOverwriting(true)
     try {
       const [orders, txs] = await Promise.all([db.orders.toArray(), db.transactions.toArray()])
       const activeOrders = orders.filter(o => !o.deletedAt)
       const activeTxs = txs.filter(t => !t.deletedAt)
-      await drive.push(activeOrders, activeTxs)
-      toast.show(`✅ Đã ghi đè Drive: ${activeOrders.length} đơn, ${activeTxs.length} giao dịch`, 'success')
-      setDriveInfo(null)
+      await fb.push(activeOrders, activeTxs)
+      toast.show(`✅ Đã ghi đè: ${activeOrders.length} đơn, ${activeTxs.length} giao dịch`, 'success')
     } catch (err) {
       toast.show('❌ Lỗi: ' + err.message, 'error')
     } finally {
@@ -353,44 +270,16 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
     }
   }
 
-  const handleCheckDrive = async () => {
-    setChecking(true)
-    setDriveInfo(null)
-    try {
-      const remote = await drive.pull()
-      if (!remote) {
-        setDriveInfo({ empty: true })
-      } else {
-        const allOrders = remote.orders || []
-        const orders = allOrders.filter(o => !o.deletedAt)
-        const deletedOrders = allOrders.filter(o => o.deletedAt)
-        const transactions = (remote.transactions || []).filter(t => !t.deletedAt)
-        setDriveInfo({
-          orders: orders.length,
-          deletedOrders: deletedOrders.length,
-          transactions: transactions.length,
-          syncedAt: remote.ts ? new Date(remote.ts).toLocaleString('vi-VN') : null
-        })
-      }
-    } catch (err) {
-      setDriveInfo({ error: err.message })
-    } finally {
-      setChecking(false)
-    }
-  }
-
   const formatLastSync = (ts) => {
     if (!ts) return 'Chưa đồng bộ'
-    const d = new Date(Number(ts))
-    return d.toLocaleString('vi-VN')
+    return new Date(Number(ts)).toLocaleString('vi-VN')
   }
 
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 200,
       background: 'rgba(0,0,0,0.5)',
-      display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-      padding: '0 0 0 0'
+      display: 'flex', alignItems: 'flex-end', justifyContent: 'center'
     }} onClick={onClose}>
       <div
         style={{
@@ -403,11 +292,9 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
       >
         <div style={{ width: 36, height: 4, background: 'var(--gray-200)', borderRadius: 2, margin: '0 auto 20px' }} />
 
-        {/* === Groq AI Section === */}
+        {/* Groq AI */}
         <Section title="📷 Quét hóa đơn AI (Groq)">
-          <p style={descStyle}>
-            Miễn phí. Đăng ký tại <strong>console.groq.com</strong> → API Keys → Create
-          </p>
+          <p style={descStyle}>Miễn phí. Đăng ký tại <strong>console.groq.com</strong> → API Keys → Create</p>
           <div style={{ position: 'relative' }}>
             <input
               type={showKey ? 'text' : 'password'}
@@ -423,97 +310,20 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
 
         <div style={{ height: 1, background: 'var(--gray-100)', margin: '20px 0' }} />
 
-        {/* === Google Drive Section === */}
-        <Section title="☁️ Đồng bộ Google Drive">
-          {!gSignedIn ? (
-            <>
-              <p style={descStyle}>
-                Lưu dữ liệu lên Google Drive để dùng trên nhiều thiết bị.
-                Cần tạo <strong>Google OAuth Client ID</strong> — xem hướng dẫn bên dưới.
-              </p>
-              <div style={{ position: 'relative', marginBottom: 10 }}>
-                <input
-                  type={showClientId ? 'text' : 'password'}
-                  value={clientId}
-                  onChange={e => setClientId(e.target.value)}
-                  placeholder="xxxx.apps.googleusercontent.com"
-                  style={inputStyle}
-                />
-                <button onClick={() => setShowClientId(s => !s)} style={eyeBtn}>{showClientId ? '🙈' : '👁️'}</button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <button onClick={handleSaveClientId} style={{ ...saveBtn, flex: 1 }}>Lưu Client ID</button>
-                <button
-                  onClick={onSignIn}
-                  disabled={!clientId || syncState === 'syncing'}
-                  style={{
-                    flex: 2, padding: '10px', borderRadius: 10, fontWeight: 700, fontSize: 14,
-                    background: clientId ? '#4285f4' : 'var(--gray-300)',
-                    color: '#fff'
-                  }}
-                >
-                  {syncState === 'syncing' ? '⏳ Đang kết nối...' : '🔑 Đăng nhập Google'}
-                </button>
-              </div>
-              {/* Nút đăng xuất khi chưa kết nối — xóa phiên cũ để thử lại sạch */}
-              <button
-                onClick={onSignOut}
-                style={{
-                  width: '100%', padding: '9px', borderRadius: 10, marginBottom: 14,
-                  border: '1.5px solid var(--gray-200)', background: 'var(--gray-50)',
-                  color: 'var(--gray-500)', fontWeight: 600, fontSize: 12
-                }}
-              >Đăng xuất / Xóa phiên cũ</button>
-              <SetupGuide />
-            </>
-          ) : (
+        {/* Firebase Sync */}
+        <Section title="☁️ Đồng bộ Firebase">
+          {gSignedIn ? (
             <div>
               <div style={{
                 background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10,
                 padding: '12px 14px', marginBottom: 10
               }}>
-                <p style={{ fontSize: 13, color: '#166534', fontWeight: 600 }}>✅ Đã kết nối Google Drive</p>
+                <p style={{ fontSize: 13, color: '#166534', fontWeight: 600 }}>✅ Đã kết nối Firebase</p>
+                {fbUser && <p style={{ fontSize: 12, color: '#16a34a', marginTop: 2 }}>{fbUser.email}</p>}
                 <p style={{ fontSize: 12, color: '#16a34a', marginTop: 2 }}>
                   Lần đồng bộ cuối: {formatLastSync(lastSync)}
                 </p>
               </div>
-
-              {/* Kiểm tra dữ liệu trên Drive */}
-              <button
-                onClick={handleCheckDrive}
-                disabled={checking}
-                style={{
-                  width: '100%', padding: '9px', borderRadius: 10, marginBottom: 8,
-                  border: '1.5px solid var(--gray-200)', background: '#fff',
-                  color: 'var(--gray-700)', fontWeight: 600, fontSize: 13
-                }}
-              >
-                {checking ? '⏳ Đang kiểm tra...' : '🔍 Xem dữ liệu trên Drive'}
-              </button>
-
-              {driveInfo && (
-                <div style={{
-                  background: driveInfo.error ? '#fef2f2' : driveInfo.empty ? '#fafafa' : '#f0f9ff',
-                  border: `1px solid ${driveInfo.error ? '#fca5a5' : driveInfo.empty ? 'var(--gray-200)' : '#bae6fd'}`,
-                  borderRadius: 10, padding: '12px 14px', marginBottom: 10, fontSize: 13
-                }}>
-                  {driveInfo.error && <p style={{ color: 'var(--danger)' }}>❌ {driveInfo.error}</p>}
-                  {driveInfo.empty && <p style={{ color: 'var(--gray-500)' }}>☁️ Drive chưa có dữ liệu nào.</p>}
-                  {driveInfo.orders !== undefined && (
-                    <>
-                      <p style={{ fontWeight: 700, color: '#0369a1', marginBottom: 6 }}>📦 Dữ liệu trên Drive:</p>
-                      <p style={{ color: 'var(--gray-700)' }}>🛍️ Đơn hàng đang hoạt động: <strong>{driveInfo.orders}</strong></p>
-                      <p style={{ color: 'var(--gray-700)' }}>🗑️ Đã xóa (ẩn): <strong>{driveInfo.deletedOrders}</strong></p>
-                      <p style={{ color: 'var(--gray-700)' }}>💰 Giao dịch: <strong>{driveInfo.transactions}</strong></p>
-                      {driveInfo.syncedAt && (
-                        <p style={{ color: 'var(--gray-500)', fontSize: 12, marginTop: 4 }}>
-                          Đẩy lên lúc: {driveInfo.syncedAt}
-                        </p>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <button
@@ -536,7 +346,7 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                 >Đăng xuất</button>
               </div>
               <button
-                onClick={handleOverwriteDrive}
+                onClick={handleOverwrite}
                 disabled={overwriting}
                 style={{
                   width: '100%', padding: '9px', borderRadius: 10,
@@ -544,8 +354,52 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                   color: '#dc2626', fontWeight: 600, fontSize: 12
                 }}
               >
-                {overwriting ? '⏳ Đang ghi...' : '⚠️ Ghi đè Drive bằng dữ liệu thiết bị này'}
+                {overwriting ? '⏳ Đang ghi...' : '⚠️ Ghi đè cloud bằng dữ liệu thiết bị này'}
               </button>
+            </div>
+          ) : (
+            <div>
+              <p style={descStyle}>
+                Lưu dữ liệu lên Firebase để đồng bộ real-time giữa các thiết bị.{' '}
+                <strong>Không bị lỗi token</strong> như Google Drive.
+              </p>
+
+              {/* Firebase Config */}
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-600)', display: 'block', marginBottom: 6 }}>
+                Firebase Config (JSON):
+              </label>
+              <textarea
+                value={fbConfigStr}
+                onChange={e => setFbConfigStr(e.target.value)}
+                placeholder={'{\n  "apiKey": "...",\n  "authDomain": "...",\n  "databaseURL": "...",\n  "projectId": "..."\n}'}
+                rows={6}
+                style={{
+                  ...inputStyle, resize: 'vertical', fontFamily: 'monospace',
+                  fontSize: 11, lineHeight: 1.5, marginBottom: 10
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button onClick={handleSaveFbConfig} style={{ ...saveBtn, flex: 1 }}>Lưu Config</button>
+                <button
+                  onClick={onSignIn}
+                  disabled={!fb.isConfigured() || syncState === 'syncing'}
+                  style={{
+                    flex: 2, padding: '10px', borderRadius: 10, fontWeight: 700, fontSize: 14,
+                    background: fb.isConfigured() ? '#4285f4' : 'var(--gray-300)', color: '#fff'
+                  }}
+                >
+                  {syncState === 'syncing' ? '⏳ Đang kết nối...' : '🔑 Đăng nhập Google'}
+                </button>
+              </div>
+              <button
+                onClick={onSignOut}
+                style={{
+                  width: '100%', padding: '9px', borderRadius: 10, marginBottom: 14,
+                  border: '1.5px solid var(--gray-200)', background: 'var(--gray-50)',
+                  color: 'var(--gray-500)', fontWeight: 600, fontSize: 12
+                }}
+              >Đăng xuất / Xóa phiên cũ</button>
+              <FirebaseSetupGuide />
             </div>
           )}
         </Section>
@@ -571,27 +425,21 @@ function Section({ title, children }) {
   )
 }
 
-function SetupGuide() {
+function FirebaseSetupGuide() {
   const [open, setOpen] = useState(false)
   return (
-    <div style={{ marginTop: 8 }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{ fontSize: 13, color: 'var(--primary)', fontWeight: 600 }}
-      >
-        {open ? '▲' : '▼'} Hướng dẫn tạo Google Client ID
+    <div style={{ marginTop: 4 }}>
+      <button onClick={() => setOpen(o => !o)} style={{ fontSize: 13, color: 'var(--primary)', fontWeight: 600 }}>
+        {open ? '▲' : '▼'} Hướng dẫn tạo Firebase project
       </button>
       {open && (
         <ol style={{ fontSize: 12, color: 'var(--gray-600)', lineHeight: 1.8, marginTop: 8, paddingLeft: 16 }}>
-          <li>Vào <strong>console.cloud.google.com</strong></li>
-          <li>Tạo project mới hoặc chọn project có sẵn</li>
-          <li>Vào <strong>APIs & Services → Enable APIs</strong> → tìm <strong>Google Drive API</strong> → Enable</li>
-          <li>Vào <strong>APIs & Services → Credentials → Create Credentials → OAuth client ID</strong></li>
-          <li>Application type: <strong>Web application</strong></li>
-          <li>Authorized JavaScript origins: thêm địa chỉ app của bạn<br/>
-            (VD: <code>http://localhost:3000</code> hoặc <code>https://tên-của-bạn.github.io</code>)</li>
-          <li>Nhấn Create → copy <strong>Client ID</strong> (dạng <code>xxx.apps.googleusercontent.com</code>)</li>
-          <li>Dán vào ô trên và nhấn Lưu</li>
+          <li>Vào <strong>console.firebase.google.com</strong> → Tạo project mới</li>
+          <li>Vào <strong>Authentication</strong> → Sign-in method → bật <strong>Google</strong></li>
+          <li>Vào <strong>Realtime Database</strong> → Create database → chọn vùng → Start in <strong>test mode</strong></li>
+          <li>Vào <strong>Project settings</strong> → Your apps → Add app → Web → đặt tên → Register</li>
+          <li>Copy config object (dạng JSON) và dán vào ô trên</li>
+          <li>Thêm domain Vercel vào <strong>Authentication → Settings → Authorized domains</strong></li>
         </ol>
       )}
     </div>
@@ -602,7 +450,7 @@ const descStyle = { fontSize: 13, color: 'var(--gray-500)', marginBottom: 10, li
 const inputStyle = {
   width: '100%', padding: '11px 42px 11px 12px', borderRadius: 10,
   border: '1.5px solid var(--gray-200)', fontSize: 13,
-  fontFamily: 'monospace', color: 'var(--gray-800)', marginBottom: 10
+  color: 'var(--gray-800)', marginBottom: 10
 }
 const eyeBtn = {
   position: 'absolute', right: 10, top: '40%', transform: 'translateY(-50%)',
