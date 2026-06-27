@@ -20,23 +20,18 @@ export default function App() {
   const isSyncing = useRef(false)
   const toast = useToast()
 
-  // Khởi tạo Google auth và tự động đăng nhập lại (silent) nếu đã từng đăng nhập
+  // Khởi tạo token client ngay khi load (để khi user tap 🔑, popup mở đồng bộ)
+  // Nếu đã từng đăng nhập: thử silent re-auth
   useEffect(() => {
     const id = drive.getClientId()
-    const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
     if (!id) return
     drive.initTokenClient(id).then(() => {
+      const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
       if (!wasSignedIn) return
-      // Silent re-auth (không popup, dùng session Google đang có)
+      // Silent re-auth — thường thất bại trên iOS Safari, không sao, giữ flag
       return drive.requestToken(true)
-        .then(() => {
-          setGSignedIn(true)
-          doSync()
-        })
-        .catch(() => {
-          // Silent fail — iOS Safari thường block prompt:none, giữ flag để lần sau thử lại
-          setGSignedIn(false)
-        })
+        .then(() => { setGSignedIn(true); doSync() })
+        .catch(() => { setGSignedIn(false) })
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -212,7 +207,7 @@ export default function App() {
     return () => window.removeEventListener('chiccheap:push', onDataChanged)
   }, [doSync])
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = () => {
     const clientId = drive.getClientId()
     if (!clientId) {
       toast.show('Vui lòng nhập Google Client ID trước', 'error')
@@ -220,20 +215,28 @@ export default function App() {
       return
     }
     setSyncState('syncing')
-    try {
-      // Chỉ init lại nếu chưa có token client
-      if (!drive.isClientInitialized()) {
-        await drive.initTokenClient(clientId)
-      }
-      // requestToken cần được gọi gần nhất có thể sau user gesture (iOS Safari)
-      await drive.requestToken(false)
+
+    const onAuthSuccess = () => {
       setGSignedIn(true)
       localStorage.setItem('google_was_signed_in', 'true')
       drive.fetchAndCacheUserEmail()
-      await doSync()
-    } catch (err) {
+      doSync()
+    }
+    const onAuthFail = (err) => {
       setSyncState('idle')
-      toast.show('❌ Đăng nhập thất bại: ' + (err.message || 'Thử lại'), 'error')
+      const msg = err?.message || err?.error || String(err) || 'Thử lại'
+      toast.show('❌ Đăng nhập thất bại: ' + msg, 'error')
+    }
+
+    if (drive.isClientInitialized()) {
+      // Gọi requestToken ĐỒNG BỘ ngay sau user tap — iOS Safari không block popup
+      drive.requestToken(false).then(onAuthSuccess).catch(onAuthFail)
+    } else {
+      // Token client chưa init (lần đầu dùng) — phải async trước
+      drive.initTokenClient(clientId)
+        .then(() => drive.requestToken(false))
+        .then(onAuthSuccess)
+        .catch(onAuthFail)
     }
   }
 
