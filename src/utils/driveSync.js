@@ -10,6 +10,7 @@ let _token = null
 let _expiry = 0
 let _fileId = null
 let _tokenClient = null
+let _refreshTimer = null
 
 export const isSignedIn = () => !!_token && Date.now() < _expiry
 
@@ -40,6 +41,19 @@ export async function initTokenClient(clientId) {
   })
 }
 
+function scheduleRefresh(expiresIn) {
+  if (_refreshTimer) clearTimeout(_refreshTimer)
+  // Refresh 5 phút trước khi hết hạn; expiresIn tính bằng giây
+  const delay = Math.max(0, (expiresIn - 300) * 1000)
+  if (delay > 0) {
+    _refreshTimer = setTimeout(() => {
+      requestToken(true).catch(() => {
+        console.warn('[Auth] Auto-refresh token thất bại')
+      })
+    }, delay)
+  }
+}
+
 export function requestToken(silent = false) {
   return new Promise((resolve, reject) => {
     if (!_tokenClient) { reject(new Error('Chưa khởi tạo. Vui lòng nhập Client ID.')); return }
@@ -51,11 +65,27 @@ export function requestToken(silent = false) {
       _token = resp.access_token
       _expiry = Date.now() + (resp.expires_in - 60) * 1000
       _fileId = null
+      // Tự gia hạn token 5 phút trước khi hết hạn — không cần đăng nhập lại
+      scheduleRefresh(resp.expires_in)
       resolve()
     }
-    // silent=true: không hiện popup, dùng session hiện có (tự fail nếu chưa có session)
-    _tokenClient.requestAccessToken({ prompt: silent ? 'none' : 'consent' })
+    const hint = localStorage.getItem('google_user_email') || ''
+    // prompt: '' = dùng phiên hiện có, không hỏi lại quyền truy cập
+    // prompt: 'none' = hoàn toàn silent (dùng cho background refresh)
+    _tokenClient.requestAccessToken({
+      prompt: silent ? 'none' : '',
+      ...(hint ? { login_hint: hint } : {})
+    })
   })
+}
+
+// Lưu email người dùng vào localStorage để dùng login_hint cho các lần sau
+export async function fetchAndCacheUserEmail() {
+  try {
+    const res = await apiFetch('https://www.googleapis.com/oauth2/v2/userinfo')
+    const info = await res.json()
+    if (info.email) localStorage.setItem('google_user_email', info.email)
+  } catch {}
 }
 
 export function signOut() {
@@ -63,6 +93,8 @@ export function signOut() {
   _token = null
   _expiry = 0
   _fileId = null
+  if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null }
+  localStorage.removeItem('google_user_email')
 }
 
 async function apiFetch(url, opts = {}) {

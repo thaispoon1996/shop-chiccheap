@@ -79,7 +79,7 @@ export function OrderForm({ order, onSave, onCancel, onNeedApiKey }) {
       if (isEdit) {
         await db.orders.update(order.id, data)
       } else {
-        data.orderId = await generateOrderId()
+        data.orderId = generateOrderId()
         data.createdAt = Date.now()
         await db.orders.add(data)
         await db.transactions.add({

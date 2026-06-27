@@ -17,6 +17,7 @@ export default function App() {
   const [gSignedIn, setGSignedIn] = useState(false)
   const [lastSync, setLastSyncUI] = useState(drive.getLastSync())
   const syncTimerRef = useRef(null)
+  const isSyncing = useRef(false)
   const toast = useToast()
 
   // Khởi tạo Google auth và tự động đăng nhập lại (silent) nếu đã từng đăng nhập
@@ -78,6 +79,8 @@ export default function App() {
 
   const doSync = useCallback(async (silent = false) => {
     if (!drive.isSignedIn()) return
+    if (isSyncing.current) return
+    isSyncing.current = true
     setSyncState('syncing')
     setSyncError('')
     try {
@@ -126,11 +129,14 @@ export default function App() {
         setGSignedIn(false)
         localStorage.removeItem('google_was_signed_in')
       }
+    } finally {
+      isSyncing.current = false
     }
   }, [])
 
   // Pull nhẹ từ Drive — không spinner, không toast, chỉ merge + refresh UI
   const backgroundPull = useCallback(async () => {
+    if (isSyncing.current) return
     // Nếu token hết hạn, thử re-auth silent trước
     if (!drive.isSignedIn()) {
       const clientId = drive.getClientId()
@@ -146,6 +152,7 @@ export default function App() {
         return
       }
     }
+    isSyncing.current = true
     try {
       const [localOrders, localTx] = await Promise.all([
         db.orders.toArray(),
@@ -171,6 +178,8 @@ export default function App() {
         setGSignedIn(false)
         localStorage.removeItem('google_was_signed_in')
       }
+    } finally {
+      isSyncing.current = false
     }
   }, [])
 
@@ -211,6 +220,7 @@ export default function App() {
       await drive.requestToken(false)
       setGSignedIn(true)
       localStorage.setItem('google_was_signed_in', 'true')
+      drive.fetchAndCacheUserEmail()
       await doSync()
     } catch (err) {
       setSyncError(err.message)

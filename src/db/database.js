@@ -38,10 +38,12 @@ export const TRANSACTION_TYPE = {
 export const INCOME_CATEGORIES = ['Tiền thuê đồ', 'Tiền đặt cọc', 'Tiền phụ thu hư hỏng', 'Khác']
 export const EXPENSE_CATEGORIES = ['Mua đồ mới', 'Giặt ủi', 'Sửa chữa', 'Vận chuyển', 'Mặt bằng', 'Khác']
 
-// Generate order ID: format ORD-YYYYMMDD-XXX
-export async function generateOrderId() {
-  const today = new Date()
-  const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '')
-  const count = await db.orders.where('createdAt').above(new Date(today.setHours(0, 0, 0, 0)).getTime()).count()
-  return `ORD-${dateStr}-${String(count + 1).padStart(3, '0')}`
+// Generate order ID: format ORD-YYYYMMDD-HHMMSS-XXX (timestamp + random suffix = unique across devices)
+export function generateOrderId() {
+  const now = new Date()
+  const pad = (n, l = 2) => String(n).padStart(l, '0')
+  const dateStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+  const timeStr = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const rand = String(Math.floor(Math.random() * 1000)).padStart(3, '0')
+  return `ORD-${dateStr}-${timeStr}-${rand}`
 }
