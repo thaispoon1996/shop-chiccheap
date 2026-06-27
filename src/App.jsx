@@ -115,6 +115,7 @@ export default function App() {
       setLastSyncUI(String(now))
       setSyncState('done')
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
+      console.log(`[Sync] Push xong ${new Date(now).toLocaleTimeString()} — ${ordersToSync.length} đơn lên Drive`)
       if (!silent) toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
@@ -130,22 +131,46 @@ export default function App() {
 
   // Pull nhẹ từ Drive — không spinner, không toast, chỉ merge + refresh UI
   const backgroundPull = useCallback(async () => {
-    if (!drive.isSignedIn()) return
+    // Nếu token hết hạn, thử re-auth silent trước
+    if (!drive.isSignedIn()) {
+      const clientId = drive.getClientId()
+      const wasSignedIn = localStorage.getItem('google_was_signed_in') === 'true'
+      if (!clientId || !wasSignedIn) return
+      try {
+        await drive.initTokenClient(clientId)
+        await drive.requestToken(true)
+        setGSignedIn(true)
+        console.log('[Sync] Re-auth silent thành công')
+      } catch {
+        console.warn('[Sync] Re-auth silent thất bại, bỏ qua pull lần này')
+        return
+      }
+    }
     try {
       const [localOrders, localTx] = await Promise.all([
         db.orders.toArray(),
         db.transactions.toArray()
       ])
       const remote = await drive.pull()
-      if (!remote) return
+      if (!remote) { console.log('[Sync] Drive chưa có dữ liệu'); return }
+
+      const prevCount = localOrders.filter(o => !o.deletedAt).length
       await mergeIntoDb(localOrders, remote.orders || [], db.orders, 'orderId')
       await mergeIntoDb(localTx, remote.transactions || [], db.transactions, 'createdAt')
+
+      const afterOrders = await db.orders.filter(o => !o.deletedAt).toArray()
+      const afterCount = afterOrders.length
       const now = Date.now()
       drive.setLastSync(now)
       setLastSyncUI(String(now))
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
-    } catch {
-      // silent fail
+      console.log(`[Sync] Pull xong ${new Date(now).toLocaleTimeString()} — Drive: ${(remote.orders||[]).length} đơn, local trước: ${prevCount}, sau: ${afterCount}`)
+    } catch (err) {
+      console.error('[Sync] backgroundPull lỗi:', err.message)
+      if (err.message?.includes('hết hạn')) {
+        setGSignedIn(false)
+        localStorage.removeItem('google_was_signed_in')
+      }
     }
   }, [])
 
@@ -202,7 +227,8 @@ export default function App() {
   }
 
   const syncIcon = syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : syncState === 'error' ? '❌' : '☁️'
-  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? 'Đồng bộ Google Drive' : 'Đăng nhập Google Drive'
+  const lastSyncText = lastSync ? `Sync lần cuối: ${new Date(Number(lastSync)).toLocaleTimeString('vi-VN')}` : 'Chưa đồng bộ'
+  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? lastSyncText : 'Đăng nhập Google Drive'
 
   const pageProps = { toast, setPage, onNeedApiKey: () => setShowSettings(true) }
 
