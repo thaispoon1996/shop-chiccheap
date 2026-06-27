@@ -441,7 +441,7 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                 />
                 <button onClick={() => setShowClientId(s => !s)} style={eyeBtn}>{showClientId ? '🙈' : '👁️'}</button>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button onClick={handleSaveClientId} style={{ ...saveBtn, flex: 1 }}>Lưu Client ID</button>
                 <button
                   onClick={onSignIn}
@@ -455,6 +455,15 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
                   {syncState === 'syncing' ? '⏳ Đang kết nối...' : '🔑 Đăng nhập Google'}
                 </button>
               </div>
+              {/* Nút đăng xuất khi chưa kết nối — xóa phiên cũ để thử lại sạch */}
+              <button
+                onClick={onSignOut}
+                style={{
+                  width: '100%', padding: '9px', borderRadius: 10, marginBottom: 14,
+                  border: '1.5px solid var(--gray-200)', background: 'var(--gray-50)',
+                  color: 'var(--gray-500)', fontWeight: 600, fontSize: 12
+                }}
+              >Đăng xuất / Xóa phiên cũ</button>
               <SetupGuide />
             </>
           ) : (

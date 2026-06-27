@@ -59,24 +59,25 @@ export function requestToken(silent = false) {
   return new Promise((resolve, reject) => {
     if (!_tokenClient) { reject(new Error('Chưa khởi tạo. Vui lòng nhập Client ID.')); return }
     _tokenClient.callback = (resp) => {
-      if (resp.error) {
-        reject(new Error(resp.error === 'access_denied' ? 'Người dùng từ chối quyền truy cập.' : resp.error))
+      console.log('[Auth] GIS response:', resp.error || 'OK', 'token:', !!resp.access_token)
+      if (resp.error || !resp.access_token) {
+        const msg = resp.error === 'access_denied' ? 'Người dùng từ chối quyền.' :
+                    resp.error === 'popup_closed_by_user' ? 'Đã đóng cửa sổ đăng nhập.' :
+                    resp.error ? `Lỗi Google: ${resp.error}` :
+                    'Không nhận được token. Thử lại.'
+        reject(new Error(msg))
         return
       }
       _token = resp.access_token
-      _expiry = Date.now() + (resp.expires_in - 60) * 1000
+      const expiresIn = Number(resp.expires_in) || 3600
+      _expiry = Date.now() + (expiresIn - 60) * 1000
       _fileId = null
-      // Tự gia hạn token 5 phút trước khi hết hạn — không cần đăng nhập lại
-      scheduleRefresh(resp.expires_in)
+      scheduleRefresh(expiresIn)
       resolve()
     }
-    const hint = localStorage.getItem('google_user_email') || ''
-    // prompt: 'select_account' = luôn hiện account picker (đáng tin trên iOS Safari)
-    // prompt: 'none' = hoàn toàn silent (dùng cho background refresh)
-    _tokenClient.requestAccessToken({
-      prompt: silent ? 'none' : 'select_account',
-      ...(hint ? { login_hint: hint } : {})
-    })
+    // consent: luôn hiện màn hình xác nhận quyền — chắc chắn hoạt động trên mọi trình duyệt
+    // none: hoàn toàn silent (dùng cho background refresh)
+    _tokenClient.requestAccessToken({ prompt: silent ? 'none' : 'consent' })
   })
 }
 
