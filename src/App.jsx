@@ -122,12 +122,16 @@ export default function App() {
       if (!silent) toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
-      setSyncError(err.message)
-      setSyncState('error')
-      if (!silent) toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
       if (err.message.includes('hết hạn')) {
+        // Token hết hạn: đổi icon thành 🔑 để user biết cần đăng nhập lại
+        // KHÔNG xóa google_was_signed_in — giữ để lần sau mở app tự thử lại
         setGSignedIn(false)
-        localStorage.removeItem('google_was_signed_in')
+        setSyncState('idle')
+        if (!silent) toastRef.current.show('🔑 Phiên đăng nhập hết hạn, nhấn nút 🔑 để đăng nhập lại', 'error')
+      } else {
+        setSyncError(err.message)
+        setSyncState('error')
+        if (!silent) toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
       }
     } finally {
       isSyncing.current = false
@@ -173,11 +177,12 @@ export default function App() {
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
       console.log(`[Sync] Pull xong ${new Date(now).toLocaleTimeString()} — Drive: ${(remote.orders||[]).length} đơn, local trước: ${prevCount}, sau: ${afterCount}`)
     } catch (err) {
-      console.error('[Sync] backgroundPull lỗi:', err.message)
+      // Background pull thất bại: im lặng, không ảnh hưởng UI
+      // Nếu hết hạn token, đổi icon 🔑 nhưng giữ google_was_signed_in để lần sau auto-retry
       if (err.message?.includes('hết hạn')) {
         setGSignedIn(false)
-        localStorage.removeItem('google_was_signed_in')
       }
+      console.error('[Sync] backgroundPull lỗi:', err.message)
     } finally {
       isSyncing.current = false
     }
@@ -236,9 +241,9 @@ export default function App() {
     localStorage.removeItem('google_was_signed_in')
   }
 
-  const syncIcon = syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : syncState === 'error' ? '❌' : '☁️'
+  const syncIcon = !gSignedIn ? '🔑' : syncState === 'syncing' ? '🔄' : syncState === 'done' ? '✅' : syncState === 'error' ? '❌' : '☁️'
   const lastSyncText = lastSync ? `Sync lần cuối: ${new Date(Number(lastSync)).toLocaleTimeString('vi-VN')}` : 'Chưa đồng bộ'
-  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? lastSyncText : 'Đăng nhập Google Drive'
+  const syncTitle = syncState === 'syncing' ? 'Đang đồng bộ...' : gSignedIn ? lastSyncText : 'Nhấn để đăng nhập lại Google Drive'
 
   const pageProps = { toast, setPage, onNeedApiKey: () => setShowSettings(true) }
 
