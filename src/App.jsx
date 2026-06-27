@@ -6,6 +6,7 @@ import { FinancePage } from './pages/FinancePage'
 import { useToast } from './components/common/Toast'
 import { exportToCSV, importFromCSV } from './utils/exportImport'
 import { getApiKey, saveApiKey } from './utils/invoiceOCR'
+import { seedOrders } from './utils/seedData'
 import * as drive from './utils/driveSync'
 import { db } from './db/database'
 
@@ -237,6 +238,7 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
   const [driveInfo, setDriveInfo] = useState(null)
   const [checking, setChecking] = useState(false)
   const [overwriting, setOverwriting] = useState(false)
+  const [seeding, setSeeding] = useState(false)
 
   const handleSaveGroq = () => {
     saveApiKey(groqKey)
@@ -247,6 +249,20 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
     drive.saveClientId(clientId)
     if (clientId) await drive.initTokenClient(clientId).catch(() => {})
     toast.show('Đã lưu Google Client ID', 'success')
+  }
+
+  const handleSeed = async () => {
+    if (!window.confirm('Nhập 48 đơn hàng từ dữ liệu cũ vào hệ thống? Hành động này không thể hoàn tác.')) return
+    setSeeding(true)
+    try {
+      const count = await seedOrders()
+      toast.show(`✅ Đã nhập ${count} đơn hàng`, 'success')
+      window.dispatchEvent(new CustomEvent('chiccheap:sync'))
+    } catch (err) {
+      toast.show('❌ Lỗi nhập dữ liệu: ' + err.message, 'error')
+    } finally {
+      setSeeding(false)
+    }
   }
 
   const handleOverwriteDrive = async () => {
@@ -315,6 +331,22 @@ function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignI
         onClick={e => e.stopPropagation()}
       >
         <div style={{ width: 36, height: 4, background: 'var(--gray-200)', borderRadius: 2, margin: '0 auto 20px' }} />
+
+        {/* === Import legacy data === */}
+        <button
+          onClick={handleSeed}
+          disabled={seeding}
+          style={{
+            width: '100%', padding: '11px', borderRadius: 10, marginBottom: 16,
+            background: seeding ? 'var(--gray-200)' : '#f0fdf4',
+            border: '1.5px solid #86efac',
+            color: '#166534', fontWeight: 700, fontSize: 14
+          }}
+        >
+          {seeding ? '⏳ Đang nhập...' : '📥 Nhập dữ liệu cũ (48 đơn)'}
+        </button>
+
+        <div style={{ height: 1, background: 'var(--gray-100)', margin: '0 0 16px' }} />
 
         {/* === Groq AI Section === */}
         <Section title="📷 Quét hóa đơn AI (Groq)">
