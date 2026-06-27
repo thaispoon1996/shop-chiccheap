@@ -5,6 +5,28 @@ import { StatusBadge } from '../components/common/StatusBadge'
 import { Modal, ConfirmDialog } from '../components/common/Modal'
 import { OrderForm } from '../components/OrderForm'
 
+function highlightText(text, query) {
+  if (!query || !text) return text
+  const norm = removeAccents(String(text)).toLowerCase()
+  const normQ = removeAccents(query).toLowerCase()
+  const parts = []
+  let last = 0
+  let idx = norm.indexOf(normQ)
+  while (idx !== -1) {
+    if (idx > last) parts.push({ t: String(text).slice(last, idx), hl: false })
+    parts.push({ t: String(text).slice(idx, idx + normQ.length), hl: true })
+    last = idx + normQ.length
+    idx = norm.indexOf(normQ, last)
+  }
+  if (last < String(text).length) parts.push({ t: String(text).slice(last), hl: false })
+  if (parts.length === 0) return text
+  return parts.map((p, i) =>
+    p.hl
+      ? <mark key={i} style={{ background: '#fde047', borderRadius: 2, padding: '0 1px', color: '#713f12' }}>{p.t}</mark>
+      : <span key={i}>{p.t}</span>
+  )
+}
+
 export function OrdersPage({ toast, onNeedApiKey }) {
   const [orders, setOrders] = useState([])
   const [search, setSearch] = useState('')
@@ -181,6 +203,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
           <OrderCard
             key={order.id}
             order={order}
+            query={search}
             active={swipeId === order.id}
             onSwipe={id => setSwipeId(swipeId === id ? null : id)}
             onEdit={() => { setEditOrder(order); setShowForm(true) }}
@@ -233,7 +256,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
 const SWIPE_OPEN = -140
 const SWIPE_THRESHOLD = 50
 
-function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
+function OrderCard({ order, query, active, onSwipe, onEdit, onDelete }) {
   const overdue = isOverdue(order.returnDate, order.status)
   const dueSoon = isDueSoon(order.returnDate, order.status)
   const cardRef = useRef(null)
@@ -359,19 +382,19 @@ function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--gray-900)' }}>{order.customerName}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--gray-900)' }}>{highlightText(order.customerName, query)}</span>
               <StatusBadge status={order.status} />
             </div>
             <a href={`tel:${order.phone}`} onClick={e => e.stopPropagation()} style={{ fontSize: 13, color: 'var(--primary)', fontWeight: 600 }}>
-              📞 {order.phone}
+              📞 {highlightText(order.phone, query)}
             </a>
             <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4 }}>
               {formatDate(order.rentDate)} → {formatDate(order.returnDate)}
             </div>
             {order.notes && (
               <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4, lineHeight: 1.5 }}>
-                📝 {order.notes}
+                📝 {highlightText(order.notes, query)}
               </div>
             )}
           </div>
