@@ -125,26 +125,43 @@ export default function App() {
     }
   }, [])
 
-  // Auto-sync khi app được focus lại (user chuyển tab/app về)
+  // Pull nhẹ từ Drive — không spinner, không toast, chỉ merge + refresh UI
+  const backgroundPull = useCallback(async () => {
+    if (!drive.isSignedIn()) return
+    try {
+      const [localOrders, localTx] = await Promise.all([
+        db.orders.toArray(),
+        db.transactions.toArray()
+      ])
+      const remote = await drive.pull()
+      if (!remote) return
+      await mergeIntoDb(localOrders, remote.orders || [], db.orders)
+      await mergeIntoDb(localTx, remote.transactions || [], db.transactions)
+      const now = Date.now()
+      drive.setLastSync(now)
+      setLastSyncUI(String(now))
+      window.dispatchEvent(new CustomEvent('chiccheap:sync'))
+    } catch {
+      // silent fail
+    }
+  }, [])
+
+  // Kéo ngay khi user mở lại app
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && drive.isSignedIn()) {
-        doSync(true)
-      }
+      if (document.visibilityState === 'visible') backgroundPull()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [doSync])
+  }, [backgroundPull])
 
-  // Auto-sync định kỳ mỗi 2 phút khi app đang mở
+  // Kéo định kỳ mỗi 20 giây để thiết bị khác thấy dữ liệu mới
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (drive.isSignedIn()) doSync(true)
-    }, 2 * 60 * 1000)
+    const timer = setInterval(backgroundPull, 20 * 1000)
     return () => clearInterval(timer)
-  }, [doSync])
+  }, [backgroundPull])
 
-  // Push ngay khi có thay đổi dữ liệu cục bộ (tạo/sửa/xóa đơn, giao dịch)
+  // Đẩy ngay lên Drive khi có thay đổi dữ liệu cục bộ
   useEffect(() => {
     const onDataChanged = () => {
       if (drive.isSignedIn()) doSync(true)
