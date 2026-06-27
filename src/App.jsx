@@ -54,10 +54,13 @@ export default function App() {
   }
 
   // Merge dữ liệu remote vào IndexedDB
-  const mergeIntoDb = async (localRecords, remoteRecords, table) => {
-    const localMap = new Map(localRecords.map(r => [r.createdAt, r]))
+  // keyField: 'orderId' cho orders (stable across devices), 'createdAt' cho transactions
+  const mergeIntoDb = async (localRecords, remoteRecords, table, keyField = 'createdAt') => {
+    const localMap = new Map(localRecords.map(r => [r[keyField], r]))
     for (const r of remoteRecords) {
-      const existing = localMap.get(r.createdAt)
+      const key = r[keyField]
+      if (!key) continue // bỏ qua record không có key
+      const existing = localMap.get(key)
       if (existing) {
         if ((r.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
           const { id: _id, ...rest } = r
@@ -93,8 +96,8 @@ export default function App() {
           const activeRemote = remoteOrders.filter(o => !o.deletedAt).length
           toastRef.current.show(`📥 Drive: ${remoteOrders.length} đơn (${activeRemote} hoạt động), đang merge...`, 'info')
         }
-        await mergeIntoDb(localOrders, remoteOrders, db.orders)
-        await mergeIntoDb(localTx, remoteTx, db.transactions)
+        await mergeIntoDb(localOrders, remoteOrders, db.orders, 'orderId')
+        await mergeIntoDb(localTx, remoteTx, db.transactions, 'createdAt')
       }
 
       const [finalOrders, finalTx] = await Promise.all([
@@ -135,8 +138,8 @@ export default function App() {
       ])
       const remote = await drive.pull()
       if (!remote) return
-      await mergeIntoDb(localOrders, remote.orders || [], db.orders)
-      await mergeIntoDb(localTx, remote.transactions || [], db.transactions)
+      await mergeIntoDb(localOrders, remote.orders || [], db.orders, 'orderId')
+      await mergeIntoDb(localTx, remote.transactions || [], db.transactions, 'createdAt')
       const now = Date.now()
       drive.setLastSync(now)
       setLastSyncUI(String(now))
