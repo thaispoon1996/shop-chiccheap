@@ -160,37 +160,30 @@ export default function App() {
 
   const pageProps = { toast, setPage, onNeedApiKey: () => setShowSettings(true) }
 
+  const headerActions = (
+    <>
+      <button
+        onClick={gSignedIn ? doSync : handleGoogleSignIn}
+        title={syncTitle}
+        disabled={syncState === 'syncing'}
+        style={{ ...headerBtnStyle, opacity: syncState === 'syncing' ? 0.6 : 1 }}
+      >{syncIcon}</button>
+      <button onClick={exportToCSV} title="Xuất CSV" style={headerBtnStyle}>⬇</button>
+      <label title="Nhập CSV" style={{ ...headerBtnStyle, cursor: 'pointer' }}>
+        ⬆
+        <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
+      </label>
+      <button onClick={() => setShowSettings(true)} title="Cài đặt" style={headerBtnStyle}>⚙️</button>
+    </>
+  )
+
   return (
     <>
-      <Layout page={page} setPage={setPage}>
+      <Layout page={page} setPage={setPage} headerActions={headerActions}>
         {page === 'dashboard' && <DashboardPage {...pageProps} />}
         {page === 'orders' && <OrdersPage {...pageProps} />}
         {page === 'finance' && <FinancePage {...pageProps} />}
       </Layout>
-
-      {/* Floating action buttons */}
-      <div style={{
-        position: 'fixed',
-        top: 'calc(60px + env(safe-area-inset-top, 0px))',
-        right: 16,
-        zIndex: 50,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6
-      }}>
-        <button onClick={() => setShowSettings(true)} title="Cài đặt" style={fabStyle}>⚙️</button>
-        <button
-          onClick={gSignedIn ? doSync : handleGoogleSignIn}
-          title={syncTitle}
-          disabled={syncState === 'syncing'}
-          style={{ ...fabStyle, opacity: syncState === 'syncing' ? 0.6 : 1 }}
-        >{syncIcon}</button>
-        <button onClick={exportToCSV} title="Xuất CSV" style={fabStyle}>⬇</button>
-        <label title="Nhập CSV" style={{ ...fabStyle, cursor: 'pointer' }}>
-          ⬆
-          <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
-        </label>
-      </div>
 
       {/* Sync error toast */}
       {syncState === 'error' && syncError && (
@@ -222,12 +215,13 @@ export default function App() {
   )
 }
 
-const fabStyle = {
-  width: 36, height: 36, borderRadius: 10,
-  background: 'rgba(255,255,255,0.95)',
-  border: '1px solid var(--gray-200)',
-  boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-  fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center'
+const headerBtnStyle = {
+  width: 34, height: 34, borderRadius: 8,
+  background: 'rgba(255,255,255,0.18)',
+  border: '1px solid rgba(255,255,255,0.25)',
+  color: '#fff',
+  fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  flexShrink: 0
 }
 
 function SettingsModal({ onClose, toast, gSignedIn, lastSync, syncState, onSignIn, onSignOut, onSync }) {

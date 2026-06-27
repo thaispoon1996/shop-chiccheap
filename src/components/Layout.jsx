@@ -6,14 +6,14 @@ const navItems = [
   { key: 'finance', label: 'Tài chính', icon: FinanceIcon }
 ]
 
-export function Layout({ page, setPage, children }) {
+export function Layout({ page, setPage, children, headerActions }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <header style={{
         background: 'var(--primary)',
         color: '#fff',
-        padding: '12px 20px 12px',
+        padding: '12px 16px 12px',
         paddingTop: 'calc(12px + env(safe-area-inset-top, 0px))',
         display: 'flex',
         alignItems: 'center',
@@ -31,6 +31,11 @@ export function Layout({ page, setPage, children }) {
           <div style={{ fontWeight: 800, fontSize: 17, letterSpacing: '-0.3px' }}>ChicCheap</div>
           <div style={{ fontSize: 11, opacity: 0.8 }}>Quản lý cho thuê trang phục</div>
         </div>
+        {headerActions && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+            {headerActions}
+          </div>
+        )}
       </header>
 
       {/* Content */}
