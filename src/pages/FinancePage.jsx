@@ -86,6 +86,7 @@ export function FinancePage({ toast }) {
     setEditTx(null)
     toast.show(editTx ? 'Cập nhật thành công' : 'Thêm giao dịch thành công')
     loadTx()
+    window.dispatchEvent(new CustomEvent('chiccheap:push'))
   }
 
   const handleDelete = async () => {
@@ -93,6 +94,7 @@ export function FinancePage({ toast }) {
     toast.show('Đã xoá giao dịch')
     setDeleteTx(null)
     loadTx()
+    window.dispatchEvent(new CustomEvent('chiccheap:push'))
   }
 
   const totalInc = filteredTx.filter(t => t.type === 'Thu').reduce((s, t) => s + t.amount, 0)

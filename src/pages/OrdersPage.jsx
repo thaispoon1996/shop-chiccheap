@@ -76,6 +76,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
     toast.show(`Đã xoá đơn hàng của ${deleteOrder.customerName}`)
     setDeleteOrder(null)
     loadOrders()
+    window.dispatchEvent(new CustomEvent('chiccheap:push'))
   }
 
   const handleSave = () => {
@@ -83,6 +84,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
     setEditOrder(null)
     toast.show(editOrder ? 'Cập nhật đơn hàng thành công' : 'Tạo đơn hàng thành công')
     loadOrders()
+    window.dispatchEvent(new CustomEvent('chiccheap:push'))
   }
 
   const toggleStatus = (s) => {

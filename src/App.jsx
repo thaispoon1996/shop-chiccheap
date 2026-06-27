@@ -73,7 +73,7 @@ export default function App() {
   const toastRef = useRef(toast)
   useEffect(() => { toastRef.current = toast }, [toast])
 
-  const doSync = useCallback(async () => {
+  const doSync = useCallback(async (silent = false) => {
     if (!drive.isSignedIn()) return
     setSyncState('syncing')
     setSyncError('')
@@ -83,25 +83,24 @@ export default function App() {
         db.transactions.toArray()
       ])
 
-      toastRef.current.show('☁️ Đang kéo dữ liệu từ Drive...', 'info')
+      if (!silent) toastRef.current.show('☁️ Đang kéo dữ liệu từ Drive...', 'info')
       const remote = await drive.pull()
 
       if (remote) {
         const remoteOrders = remote.orders || []
         const remoteTx = remote.transactions || []
-        const activeRemote = remoteOrders.filter(o => !o.deletedAt).length
-        toastRef.current.show(`📥 Drive: ${remoteOrders.length} đơn (${activeRemote} hoạt động), đang merge...`, 'info')
+        if (!silent) {
+          const activeRemote = remoteOrders.filter(o => !o.deletedAt).length
+          toastRef.current.show(`📥 Drive: ${remoteOrders.length} đơn (${activeRemote} hoạt động), đang merge...`, 'info')
+        }
         await mergeIntoDb(localOrders, remoteOrders, db.orders)
         await mergeIntoDb(localTx, remoteTx, db.transactions)
-      } else {
-        toastRef.current.show('Drive chưa có dữ liệu, đang đẩy lên...', 'info')
       }
 
       const [finalOrders, finalTx] = await Promise.all([
         db.orders.toArray(),
         db.transactions.toArray()
       ])
-      // Chỉ push đơn còn hoạt động hoặc xóa trong 30 ngày gần nhất (tránh rác tích lũy)
       const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
       const ordersToSync = finalOrders.filter(o => !o.deletedAt || o.deletedAt > cutoff)
       const txToSync = finalTx.filter(t => !t.deletedAt || t.deletedAt > cutoff)
@@ -113,18 +112,46 @@ export default function App() {
       setLastSyncUI(String(now))
       setSyncState('done')
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
-      toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
+      if (!silent) toastRef.current.show(`✅ Đồng bộ xong: ${activeCount} đơn hàng`, 'success')
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
       setSyncError(err.message)
       setSyncState('error')
-      toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
+      if (!silent) toastRef.current.show('❌ Lỗi sync: ' + err.message, 'error')
       if (err.message.includes('hết hạn')) {
         setGSignedIn(false)
         localStorage.removeItem('google_was_signed_in')
       }
     }
   }, [])
+
+  // Auto-sync khi app được focus lại (user chuyển tab/app về)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && drive.isSignedIn()) {
+        doSync(true)
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [doSync])
+
+  // Auto-sync định kỳ mỗi 2 phút khi app đang mở
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (drive.isSignedIn()) doSync(true)
+    }, 2 * 60 * 1000)
+    return () => clearInterval(timer)
+  }, [doSync])
+
+  // Push ngay khi có thay đổi dữ liệu cục bộ (tạo/sửa/xóa đơn, giao dịch)
+  useEffect(() => {
+    const onDataChanged = () => {
+      if (drive.isSignedIn()) doSync(true)
+    }
+    window.addEventListener('chiccheap:push', onDataChanged)
+    return () => window.removeEventListener('chiccheap:push', onDataChanged)
+  }, [doSync])
 
   const handleGoogleSignIn = async () => {
     const clientId = drive.getClientId()
