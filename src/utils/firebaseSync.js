@@ -1,5 +1,8 @@
 import { initializeApp, getApps } from 'firebase/app'
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut as fbSignOut } from 'firebase/auth'
+import {
+  getAuth, signInWithPopup, signInWithRedirect, getRedirectResult,
+  GoogleAuthProvider, onAuthStateChanged, signOut as fbSignOut
+} from 'firebase/auth'
 import { getDatabase, ref, set, onValue, off, get } from 'firebase/database'
 
 let _auth = null
@@ -7,6 +10,9 @@ let _db = null
 let _uid = null
 let _realtimeRef = null
 let _lastPushTs = 0
+
+// iOS Safari dùng redirect thay popup (popup bị block bởi ITP)
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent)
 
 export const getConfig = () => {
   try { return JSON.parse(localStorage.getItem('fb_config') || 'null') } catch { return null }
@@ -34,9 +40,32 @@ export function onAuthChange(callback) {
   })
 }
 
+// Gọi sau init() mỗi lần app load để xử lý kết quả redirect (iOS)
+export async function checkRedirectResult() {
+  if (!_auth) return null
+  try {
+    const result = await getRedirectResult(_auth)
+    if (result?.user) {
+      _uid = result.user.uid
+      return result.user
+    }
+  } catch (err) {
+    // Bỏ qua lỗi "no redirect" — đây là trường hợp bình thường
+    if (err.code !== 'auth/no-auth-event') {
+      console.warn('[FB] Redirect result:', err.message)
+    }
+  }
+  return null
+}
+
 export async function signIn() {
   if (!_auth) await init()
   const provider = new GoogleAuthProvider()
+  if (isIOS()) {
+    // Redirect flow: trang sẽ navigate đi rồi quay lại — không có return value
+    await signInWithRedirect(_auth, provider)
+    return null
+  }
   const result = await signInWithPopup(_auth, provider)
   _uid = result.user.uid
   return result.user

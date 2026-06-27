@@ -98,15 +98,15 @@ export default function App() {
   // Khởi tạo Firebase và lắng nghe auth state
   useEffect(() => {
     if (!fb.isConfigured()) return
-    fb.init().then(() => {
-      // onAuthChange tự khôi phục session từ lần trước — không cần đăng nhập lại
-      const unsub = fb.onAuthChange((user) => {
+    let unsubAuth = null
+    fb.init().then(async () => {
+      // Xử lý kết quả redirect trước (iOS Safari dùng redirect thay popup)
+      await fb.checkRedirectResult()
+      unsubAuth = fb.onAuthChange((user) => {
         if (user) {
           setFbUser(user)
           setGSignedIn(true)
-          // Subscribe real-time — nhận dữ liệu ngay khi thiết bị khác thay đổi
           fb.subscribe(handleRemoteData)
-          // Push dữ liệu local lên để các thiết bị khác có thể pull
           pushToCloud(true)
         } else {
           setFbUser(null)
@@ -114,8 +114,8 @@ export default function App() {
           fb.unsubscribe()
         }
       })
-      return unsub
     }).catch(err => console.error('[FB] Init lỗi:', err))
+    return () => { if (unsubAuth) unsubAuth() }
   }, [handleRemoteData, pushToCloud])
 
   // Đẩy ngay khi có thay đổi dữ liệu local
