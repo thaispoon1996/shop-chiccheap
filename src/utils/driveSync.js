@@ -13,6 +13,7 @@ let _tokenClient = null
 let _refreshTimer = null
 
 export const isSignedIn = () => !!_token && Date.now() < _expiry
+export const isClientInitialized = () => !!_tokenClient
 
 function loadGIS() {
   if (window.google?.accounts?.oauth2) return Promise.resolve()
@@ -70,10 +71,10 @@ export function requestToken(silent = false) {
       resolve()
     }
     const hint = localStorage.getItem('google_user_email') || ''
-    // prompt: '' = dùng phiên hiện có, không hỏi lại quyền truy cập
+    // prompt: 'select_account' = luôn hiện account picker (đáng tin trên iOS Safari)
     // prompt: 'none' = hoàn toàn silent (dùng cho background refresh)
     _tokenClient.requestAccessToken({
-      prompt: silent ? 'none' : '',
+      prompt: silent ? 'none' : 'select_account',
       ...(hint ? { login_hint: hint } : {})
     })
   })

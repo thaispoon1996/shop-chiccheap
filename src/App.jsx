@@ -34,8 +34,8 @@ export default function App() {
           doSync()
         })
         .catch(() => {
-          // Silent fail — user sẽ tự bấm đăng nhập
-          localStorage.removeItem('google_was_signed_in')
+          // Silent fail — iOS Safari thường block prompt:none, giữ flag để lần sau thử lại
+          setGSignedIn(false)
         })
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -221,15 +221,19 @@ export default function App() {
     }
     setSyncState('syncing')
     try {
-      await drive.initTokenClient(clientId)
+      // Chỉ init lại nếu chưa có token client
+      if (!drive.isClientInitialized()) {
+        await drive.initTokenClient(clientId)
+      }
+      // requestToken cần được gọi gần nhất có thể sau user gesture (iOS Safari)
       await drive.requestToken(false)
       setGSignedIn(true)
       localStorage.setItem('google_was_signed_in', 'true')
       drive.fetchAndCacheUserEmail()
       await doSync()
     } catch (err) {
-      setSyncError(err.message)
-      setSyncState('error')
+      setSyncState('idle')
+      toast.show('❌ Đăng nhập thất bại: ' + (err.message || 'Thử lại'), 'error')
     }
   }
 
