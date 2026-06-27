@@ -118,11 +118,12 @@ export default function App() {
       setTimeout(() => setSyncState('idle'), 2500)
     } catch (err) {
       if (err.message.includes('hết hạn')) {
-        // Token hết hạn: đổi icon thành 🔑 để user biết cần đăng nhập lại
-        // KHÔNG xóa google_was_signed_in — giữ để lần sau mở app tự thử lại
-        setGSignedIn(false)
         setSyncState('idle')
-        if (!silent) toastRef.current.show('🔑 Phiên đăng nhập hết hạn, nhấn nút 🔑 để đăng nhập lại', 'error')
+        // Chỉ logout UI khi user bấm tay (không silent) — không tự logout khi sync nền
+        if (!silent) {
+          setGSignedIn(false)
+          toastRef.current.show('🔑 Phiên hết hạn, nhấn 🔑 để đăng nhập lại', 'error')
+        }
       } else {
         setSyncError(err.message)
         setSyncState('error')
@@ -172,12 +173,9 @@ export default function App() {
       window.dispatchEvent(new CustomEvent('chiccheap:sync'))
       console.log(`[Sync] Pull xong ${new Date(now).toLocaleTimeString()} — Drive: ${(remote.orders||[]).length} đơn, local trước: ${prevCount}, sau: ${afterCount}`)
     } catch (err) {
-      // Background pull thất bại: im lặng, không ảnh hưởng UI
-      // Nếu hết hạn token, đổi icon 🔑 nhưng giữ google_was_signed_in để lần sau auto-retry
-      if (err.message?.includes('hết hạn')) {
-        setGSignedIn(false)
-      }
-      console.error('[Sync] backgroundPull lỗi:', err.message)
+      // Background pull thất bại hoàn toàn im lặng — KHÔNG logout user
+      // Lần sau sẽ tự thử lại
+      console.warn('[Sync] backgroundPull lỗi (silent):', err.message)
     } finally {
       isSyncing.current = false
     }
