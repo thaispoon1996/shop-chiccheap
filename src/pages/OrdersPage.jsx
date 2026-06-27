@@ -9,12 +9,14 @@ export function OrdersPage({ toast, onNeedApiKey }) {
   const [orders, setOrders] = useState([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState([])
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editOrder, setEditOrder] = useState(null)
   const [deleteOrder, setDeleteOrder] = useState(null)
   const [swipeId, setSwipeId] = useState(null)
   const [sortBy, setSortBy] = useState('returnDate')
-  const debounceRef = useRef(null)
+  const [bulkConfirm, setBulkConfirm] = useState(false)
 
   const loadOrders = useCallback(async () => {
     const all = await db.orders.filter(o => !o.deletedAt).toArray()
@@ -30,6 +32,8 @@ export function OrdersPage({ toast, onNeedApiKey }) {
   const filtered = orders
     .filter(o => {
       if (statusFilter.length > 0 && !statusFilter.includes(o.status)) return false
+      if (dateFrom && o.returnDate < dateFrom) return false
+      if (dateTo && o.returnDate > dateTo) return false
       if (!search) return true
       const q = removeAccents(search)
       return (
@@ -46,6 +50,8 @@ export function OrdersPage({ toast, onNeedApiKey }) {
       return 0
     })
 
+  const pendingBulk = filtered.filter(o => o.status !== 'Đã trả')
+
   const handleDelete = async () => {
     await db.orders.update(deleteOrder.id, { deletedAt: Date.now() })
     toast.show(`Đã xoá đơn hàng của ${deleteOrder.customerName}`)
@@ -60,11 +66,23 @@ export function OrdersPage({ toast, onNeedApiKey }) {
     loadOrders()
   }
 
+  const handleBulkMarkReturned = async () => {
+    const now = Date.now()
+    await Promise.all(
+      pendingBulk.map(o => db.orders.update(o.id, { status: 'Đã trả', updatedAt: now }))
+    )
+    toast.show(`✅ Đã cập nhật ${pendingBulk.length} đơn → Đã trả`, 'success')
+    setBulkConfirm(false)
+    loadOrders()
+  }
+
   const toggleStatus = (s) => {
     setStatusFilter(prev =>
       prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]
     )
   }
+
+  const hasDateFilter = dateFrom || dateTo
 
   return (
     <div style={{ minHeight: '100%', background: 'var(--gray-50)' }}>
@@ -77,6 +95,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
         top: 0,
         zIndex: 10
       }}>
+        {/* Search */}
         <div style={{ position: 'relative' }}>
           <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 16, color: 'var(--gray-400)' }}>🔍</span>
           <input
@@ -91,6 +110,53 @@ export function OrdersPage({ toast, onNeedApiKey }) {
             }}
           />
         </div>
+
+        {/* Date range filter */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+          <span style={{ fontSize: 12, color: 'var(--gray-500)', flexShrink: 0 }}>📅 Ngày trả:</span>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => setDateFrom(e.target.value)}
+            style={{
+              flex: 1, padding: '6px 8px', borderRadius: 8, fontSize: 12,
+              border: `1.5px solid ${dateFrom ? 'var(--primary)' : 'var(--gray-200)'}`,
+              color: 'var(--gray-700)'
+            }}
+          />
+          <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>→</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => setDateTo(e.target.value)}
+            style={{
+              flex: 1, padding: '6px 8px', borderRadius: 8, fontSize: 12,
+              border: `1.5px solid ${dateTo ? 'var(--primary)' : 'var(--gray-200)'}`,
+              color: 'var(--gray-700)'
+            }}
+          />
+          {hasDateFilter && (
+            <button
+              onClick={() => { setDateFrom(''); setDateTo('') }}
+              style={{ fontSize: 16, color: 'var(--gray-400)', flexShrink: 0 }}
+            >✕</button>
+          )}
+        </div>
+
+        {/* Bulk action - appears when date filter active and there are non-returned orders */}
+        {hasDateFilter && pendingBulk.length > 0 && (
+          <button
+            onClick={() => setBulkConfirm(true)}
+            style={{
+              width: '100%', marginTop: 8, padding: '8px',
+              borderRadius: 10, fontSize: 13, fontWeight: 700,
+              background: '#fef3c7', border: '1.5px solid #fcd34d',
+              color: '#92400e'
+            }}
+          >
+            ✅ Đánh dấu {pendingBulk.length} đơn đang lọc → Đã trả
+          </button>
+        )}
 
         {/* Status filter chips */}
         <div style={{ display: 'flex', gap: 8, marginTop: 10, overflowX: 'auto', paddingBottom: 2 }}>
@@ -137,7 +203,7 @@ export function OrdersPage({ toast, onNeedApiKey }) {
           <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--gray-400)' }}>
             <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
             <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Không có đơn hàng nào</div>
-            <div style={{ fontSize: 13 }}>{search || statusFilter.length > 0 ? 'Thử thay đổi bộ lọc' : 'Nhấn + để tạo đơn hàng đầu tiên'}</div>
+            <div style={{ fontSize: 13 }}>{search || statusFilter.length > 0 || hasDateFilter ? 'Thử thay đổi bộ lọc' : 'Nhấn + để tạo đơn hàng đầu tiên'}</div>
           </div>
         ) : filtered.map(order => (
           <OrderCard
@@ -188,6 +254,15 @@ export function OrdersPage({ toast, onNeedApiKey }) {
           message={`Bạn có chắc muốn xoá đơn hàng của "${deleteOrder.customerName}"?`}
           onConfirm={handleDelete}
           onCancel={() => setDeleteOrder(null)}
+        />
+      )}
+
+      {/* Bulk mark returned confirm */}
+      {bulkConfirm && (
+        <ConfirmDialog
+          message={`Chuyển ${pendingBulk.length} đơn hàng đang lọc sang trạng thái "Đã trả"?`}
+          onConfirm={handleBulkMarkReturned}
+          onCancel={() => setBulkConfirm(false)}
         />
       )}
     </div>
@@ -266,11 +341,9 @@ function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
               {formatDate(order.rentDate)} → {formatDate(order.returnDate)}
             </div>
             {order.notes && (
-              <div style={{
-                fontSize: 12, color: 'var(--gray-500)',
-                marginTop: 4, overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap'
-              }}>📝 {order.notes}</div>
+              <div style={{ fontSize: 12, color: 'var(--gray-500)', marginTop: 4, lineHeight: 1.5 }}>
+                📝 {order.notes}
+              </div>
             )}
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
