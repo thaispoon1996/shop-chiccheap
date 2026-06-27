@@ -16,7 +16,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
   const [deleteOrder, setDeleteOrder] = useState(null)
   const [swipeId, setSwipeId] = useState(null)
   const [sortBy, setSortBy] = useState('returnDate')
-  const [bulkConfirm, setBulkConfirm] = useState(false)
 
   const loadOrders = useCallback(async () => {
     const all = await db.orders.filter(o => !o.deletedAt).toArray()
@@ -50,8 +49,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
       return 0
     })
 
-  const pendingBulk = filtered.filter(o => o.status !== 'Đã trả')
-
   const handleDelete = async () => {
     await db.orders.update(deleteOrder.id, { deletedAt: Date.now() })
     toast.show(`Đã xoá đơn hàng của ${deleteOrder.customerName}`)
@@ -63,16 +60,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
     setShowForm(false)
     setEditOrder(null)
     toast.show(editOrder ? 'Cập nhật đơn hàng thành công' : 'Tạo đơn hàng thành công')
-    loadOrders()
-  }
-
-  const handleBulkMarkReturned = async () => {
-    const now = Date.now()
-    await Promise.all(
-      pendingBulk.map(o => db.orders.update(o.id, { status: 'Đã trả', updatedAt: now }))
-    )
-    toast.show(`✅ Đã cập nhật ${pendingBulk.length} đơn → Đã trả`, 'success')
-    setBulkConfirm(false)
     loadOrders()
   }
 
@@ -142,21 +129,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
             >✕</button>
           )}
         </div>
-
-        {/* Bulk action - appears when date filter active and there are non-returned orders */}
-        {hasDateFilter && pendingBulk.length > 0 && (
-          <button
-            onClick={() => setBulkConfirm(true)}
-            style={{
-              width: '100%', marginTop: 8, padding: '8px',
-              borderRadius: 10, fontSize: 13, fontWeight: 700,
-              background: '#fef3c7', border: '1.5px solid #fcd34d',
-              color: '#92400e'
-            }}
-          >
-            ✅ Đánh dấu {pendingBulk.length} đơn đang lọc → Đã trả
-          </button>
-        )}
 
         {/* Status filter chips */}
         <div style={{ display: 'flex', gap: 8, marginTop: 10, overflowX: 'auto', paddingBottom: 2 }}>
@@ -233,7 +205,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
         }}
       >+</button>
 
-      {/* Form modal */}
       {showForm && (
         <Modal
           title={editOrder ? 'Chỉnh sửa đơn hàng' : 'Tạo đơn hàng mới'}
@@ -248,7 +219,6 @@ export function OrdersPage({ toast, onNeedApiKey }) {
         </Modal>
       )}
 
-      {/* Delete confirm */}
       {deleteOrder && (
         <ConfirmDialog
           message={`Bạn có chắc muốn xoá đơn hàng của "${deleteOrder.customerName}"?`}
@@ -256,26 +226,82 @@ export function OrdersPage({ toast, onNeedApiKey }) {
           onCancel={() => setDeleteOrder(null)}
         />
       )}
-
-      {/* Bulk mark returned confirm */}
-      {bulkConfirm && (
-        <ConfirmDialog
-          message={`Chuyển ${pendingBulk.length} đơn hàng đang lọc sang trạng thái "Đã trả"?`}
-          onConfirm={handleBulkMarkReturned}
-          onCancel={() => setBulkConfirm(false)}
-        />
-      )}
     </div>
   )
 }
 
+const SWIPE_OPEN = -140
+const SWIPE_THRESHOLD = 50
+
 function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
   const overdue = isOverdue(order.returnDate, order.status)
   const dueSoon = isDueSoon(order.returnDate, order.status)
+  const cardRef = useRef(null)
+  const touchStartX = useRef(null)
+  const touchStartY = useRef(null)
+  const dragging = useRef(false)
+
+  // Sync position when active changes externally (e.g. another card opened)
+  useEffect(() => {
+    if (!cardRef.current) return
+    cardRef.current.style.transition = 'transform 0.25s ease'
+    cardRef.current.style.transform = `translateX(${active ? SWIPE_OPEN : 0}px)`
+  }, [active])
+
+  const handleTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX
+    touchStartY.current = e.touches[0].clientY
+    dragging.current = false
+    if (cardRef.current) cardRef.current.style.transition = 'none'
+  }
+
+  const handleTouchMove = (e) => {
+    if (touchStartX.current === null) return
+    const dx = e.touches[0].clientX - touchStartX.current
+    const dy = e.touches[0].clientY - touchStartY.current
+    // Ignore predominantly vertical scrolls
+    if (!dragging.current && Math.abs(dy) > Math.abs(dx)) return
+    if (Math.abs(dx) > 8) {
+      dragging.current = true
+      e.preventDefault()
+    }
+    const base = active ? SWIPE_OPEN : 0
+    const clamped = Math.max(SWIPE_OPEN, Math.min(0, base + dx))
+    if (cardRef.current) {
+      cardRef.current.style.transform = `translateX(${clamped}px)`
+    }
+  }
+
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null) return
+    const dx = e.changedTouches[0].clientX - touchStartX.current
+    if (cardRef.current) cardRef.current.style.transition = 'transform 0.25s ease'
+
+    let shouldOpen = active
+    if (dx < -SWIPE_THRESHOLD) shouldOpen = true
+    if (dx > SWIPE_THRESHOLD) shouldOpen = false
+
+    if (shouldOpen !== active) {
+      onSwipe(order.id) // useEffect will animate to final position
+    } else {
+      // Snap back to committed state
+      if (cardRef.current) {
+        cardRef.current.style.transform = `translateX(${active ? SWIPE_OPEN : 0}px)`
+      }
+    }
+    touchStartX.current = null
+    touchStartY.current = null
+  }
+
+  const handleClick = () => {
+    // Tap on open card closes it; tap on closed card does nothing (use swipe)
+    if (!dragging.current && active) onSwipe(order.id)
+    dragging.current = false
+  }
 
   return (
     <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 14 }}>
-      {/* Action buttons behind */}
+      {/* Action buttons revealed by swipe */}
       <div style={{
         position: 'absolute', right: 0, top: 0, bottom: 0,
         display: 'flex', alignItems: 'center', gap: 8, paddingRight: 8,
@@ -301,28 +327,31 @@ function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
 
       {/* Card */}
       <div
-        onClick={() => onSwipe(order.id)}
+        ref={cardRef}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onClick={handleClick}
         style={{
           background: '#fff',
           borderRadius: 14,
           padding: '14px 16px',
           border: `1.5px solid ${overdue ? '#fca5a5' : dueSoon ? '#fcd34d' : 'var(--gray-200)'}`,
-          transform: active ? 'translateX(-140px)' : 'translateX(0)',
+          transform: active ? `translateX(${SWIPE_OPEN}px)` : 'translateX(0)',
           transition: 'transform 0.25s ease',
-          cursor: 'pointer',
+          cursor: 'default',
           position: 'relative',
-          zIndex: 1
+          zIndex: 1,
+          userSelect: 'none',
+          WebkitUserSelect: 'none'
         }}
       >
-        {/* Alert banner */}
         {(overdue || dueSoon) && (
           <div style={{
-            padding: '5px 10px',
-            borderRadius: 8,
+            padding: '5px 10px', borderRadius: 8,
             background: overdue ? '#fee2e2' : '#fef3c7',
             color: overdue ? 'var(--danger)' : 'var(--warning)',
-            fontSize: 12, fontWeight: 600,
-            marginBottom: 10
+            fontSize: 12, fontWeight: 600, marginBottom: 10
           }}>
             {overdue ? '⚠️ Quá hạn trả!' : '⏰ Sắp đến hạn trả (trong 24h)'}
           </div>
@@ -355,14 +384,6 @@ function OrderCard({ order, active, onSwipe, onEdit, onDelete }) {
             </div>
           </div>
         </div>
-
-        {/* Swipe hint */}
-        <div style={{
-          position: 'absolute', right: 10, top: '50%',
-          transform: 'translateY(-50%)',
-          fontSize: 12, color: 'var(--gray-300)',
-          opacity: active ? 0 : 1, transition: 'opacity 0.2s'
-        }}>‹</div>
       </div>
     </div>
   )
