@@ -214,7 +214,8 @@ export default function App() {
       setShowSettings(true)
       return
     }
-    setSyncState('syncing')
+    // KHÔNG set syncState ở đây — để doSync tự quản lý
+    // Nếu set 'syncing' ở đây mà doSync bị block bởi isSyncing thì UI sẽ stuck
 
     const onAuthSuccess = () => {
       setGSignedIn(true)
@@ -223,7 +224,6 @@ export default function App() {
       doSync()
     }
     const onAuthFail = (err) => {
-      setSyncState('idle')
       const msg = err?.message || err?.error || String(err) || 'Thử lại'
       toast.show('❌ Đăng nhập thất bại: ' + msg, 'error')
     }

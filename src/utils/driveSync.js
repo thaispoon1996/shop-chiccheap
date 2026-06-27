@@ -100,12 +100,22 @@ export function signOut() {
 
 async function apiFetch(url, opts = {}) {
   if (!isSignedIn()) throw new Error('Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.')
-  const res = await fetch(url, {
-    ...opts,
-    headers: { Authorization: `Bearer ${_token}`, ...opts.headers }
-  })
-  if (res.status === 401) { _token = null; throw new Error('Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.') }
-  return res
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 30000)
+  try {
+    const res = await fetch(url, {
+      ...opts,
+      signal: controller.signal,
+      headers: { Authorization: `Bearer ${_token}`, ...opts.headers }
+    })
+    if (res.status === 401) { _token = null; throw new Error('Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.') }
+    return res
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('Kết nối Drive timeout, kiểm tra mạng và thử lại.')
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function getFileId() {
